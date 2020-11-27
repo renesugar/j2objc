@@ -355,6 +355,25 @@ public class ObjectiveCHeaderGeneratorTest extends GenerationTest {
         "@protocol UnitTestExample < UnitTestBar, JavaObject >");
   }
 
+  public void testNativeSuperInterfaceTranslation() throws IOException {
+    if (onJava9OrAbove()) {
+      // Allow overwriting the system java.lang.Iterable with our own.
+      options.addPlatformModuleSystemOptions("--patch-module", "java.base=" + tempDir);
+      // Allow java.base to see com.google.j2objc.
+      options.addPlatformModuleSystemOptions("--add-reads", "java.base=ALL-UNNAMED");
+    }
+    // Translate the file in the temp directory (i.e. avoid in-memory copy) because the temp
+    // directory is already configured as a patch-module location.
+    String filename = "java/lang/Iterable";
+    String path = addSourceFile("package java.lang;"
+            + "import com.google.j2objc.NSFastEnumeration;"
+            + "public interface Iterable<T> extends NSFastEnumeration { String foo(); }",
+        filename + ".java");
+    String translation = translateSourceFileNoInMemory(path, filename + ".h");
+    assertTranslation(translation,
+        "@protocol JavaLangIterable < NSFastEnumeration, JavaObject >");
+  }
+
   public void testConstTranslation() throws IOException {
     String translation = translateSourceFile(
         "package unit.test; public class Example { public static final int FOO=1; }",
@@ -670,7 +689,7 @@ public class ObjectiveCHeaderGeneratorTest extends GenerationTest {
         + "}";
     String translation = translateSourceFile(sourceContent, "FooBar", "FooBar.m");
     assertTranslatedLines(translation,
-        "__unsafe_unretained FooBar_Internal *fieldBar_;",
+        "WEAK_ FooBar_Internal *fieldBar_;",
         "FooBar_Internal *fieldFoo_;");
   }
 
@@ -750,9 +769,9 @@ public class ObjectiveCHeaderGeneratorTest extends GenerationTest {
         + " void foo() {}"
         + " @WeakOuter public class Inner { void bar() { foo(); } }"
         + " @Weak public Object obj; }", "Test", "Test.h");
-    assertTranslation(translation, "__unsafe_unretained id obj_;");
+    assertTranslation(translation, "WEAK_ id obj_;");
     translation = getTranslatedFile("Test.m");
-    assertTranslation(translation, "__unsafe_unretained Test *this$0_;");
+    assertTranslation(translation, "WEAK_ Test *this$0_;");
   }
 
   public void testReservedWordAsAnnotationPropertyName() throws IOException {
@@ -856,5 +875,22 @@ public class ObjectiveCHeaderGeneratorTest extends GenerationTest {
 
     // The companion class of Foo still has the class method +[Foo f].
     assertTranslatedLines(impl, "+ (void)f {", "Foo_f();", "}");
+  }
+
+  // Verifies that properly encoded Kythe metadata and associated pragmas are generated when
+  // using the Kythe mapping flag.
+  public void testKytheMetadataMappings() throws IOException {
+    options.setEmitKytheMappings(true);
+    String translation =
+        translateSourceFile("class A {" + "public A(int i) {}" + "A() {} }", "A", "A.h");
+    String kytheMetadata = extractKytheMetadata(translation);
+
+    assertTranslation(translation, "#ifdef KYTHE_IS_RUNNING");
+    assertTranslation(
+        translation, "#pragma kythe_inline_metadata" + " \"This file contains Kythe metadata.\"");
+    assertTranslation(translation, "/* This file contains Kythe metadata.");
+
+    assertTranslation(kytheMetadata, "kythe0");
+    assertTranslation(kytheMetadata, "{\"type\":\"anchor_anchor\"");
   }
 }

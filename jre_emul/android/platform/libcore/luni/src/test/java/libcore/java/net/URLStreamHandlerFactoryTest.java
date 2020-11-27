@@ -19,8 +19,11 @@ package libcore.java.net;
 import java.lang.reflect.Field;
 import java.net.URL;
 import java.net.URLConnection;
+import java.net.URLImpl;
 import java.net.URLStreamHandler;
 import java.net.URLStreamHandlerFactory;
+import junit.framework.Assert;
+import junit.framework.AssertionFailedError;
 import junit.framework.TestCase;
 import libcore.java.net.customstreamhandler.http.Handler;
 
@@ -30,7 +33,8 @@ public final class URLStreamHandlerFactoryTest extends TestCase {
     private boolean isCreateURLStreamHandlerCalled;
 
     public void setUp() throws IllegalAccessException {
-        for (Field field : URL.class.getDeclaredFields()) {
+        // j2objc: use URLImpl instead of URL.
+        for (Field field : URLImpl.class.getDeclaredFields()) {
             if (URLStreamHandlerFactory.class.equals(field.getType())) {
                 assertNull("URL declares multiple URLStreamHandlerFactory fields", factoryField);
                 factoryField = field;
@@ -61,13 +65,23 @@ public final class URLStreamHandlerFactoryTest extends TestCase {
         try {
             URL.setURLStreamHandlerFactory(shf);
             fail();
+        } catch (AssertionFailedError error) {
+            // Rethrow the error thrown by fail to avoid it being caught by the more general catch
+            // statement below.
+            throw error;
         } catch (Error expected) {
+            // The setURLStreamHandlerFactory is behaving correctly by throwing an Error.
         }
 
         try {
             URL.setURLStreamHandlerFactory(null);
             fail();
+        } catch (AssertionFailedError error) {
+            // Rethrow the error thrown by fail to avoid it being caught by the more general catch
+            // statement below.
+            throw error;
         } catch (Error expected) {
+            // The setURLStreamHandlerFactory is behaving correctly by throwing an Error.
         }
     }
 

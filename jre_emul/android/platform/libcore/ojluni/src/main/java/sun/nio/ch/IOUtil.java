@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,7 +34,7 @@ import java.nio.ByteBuffer;
  * File-descriptor based I/O utilities that are shared by NIO classes.
  */
 
-class IOUtil {
+public class IOUtil {
 
     /**
      * Max number of iovec structures that readv/writev supports
@@ -316,7 +316,7 @@ class IOUtil {
         }
     }
 
-    static FileDescriptor newFD(int i) {
+    public static FileDescriptor newFD(int i) {
         FileDescriptor fd = new FileDescriptor();
         setfdVal(fd, i);
         return fd;
@@ -333,18 +333,43 @@ class IOUtil {
 
     static native boolean drain(int fd) throws IOException;
 
-    static native void configureBlocking(FileDescriptor fd, boolean blocking)
+    public static native void configureBlocking(FileDescriptor fd,
+                                                boolean blocking)
         throws IOException;
 
-    static native int fdVal(FileDescriptor fd);
+    public static native int fdVal(FileDescriptor fd);
 
     static native void setfdVal(FileDescriptor fd, int value);
 
-    static native int iovMax();
-
     static native int fdLimit();
 
+    static native int iovMax();
+
+    // Android-removed: Code to load native libraries, doesn't make sense on Android.
+    /*
+    static native void initIDs();
+
+    /**
+     * Used to trigger loading of native libraries
+     *
+    public static void load() { }
+    */
+
     static {
+        // Android-removed: Code to load native libraries, doesn't make sense on Android.
+        /*
+        java.security.AccessController.doPrivileged(
+                new java.security.PrivilegedAction<Void>() {
+                    public Void run() {
+                        System.loadLibrary("net");
+                        System.loadLibrary("nio");
+                        return null;
+                    }
+                });
+
+        initIDs();
+        */
+
         IOV_MAX = iovMax();
     }
 

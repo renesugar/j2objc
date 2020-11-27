@@ -1,6 +1,4 @@
 /*
- * Copyright 2012 Google Inc. All Rights Reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -19,23 +17,30 @@ package com.google.devtools.j2objc;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.io.Files;
 import com.google.common.io.Resources;
+import com.google.devtools.j2objc.gen.GenerationUnit;
 import com.google.devtools.j2objc.util.ErrorUtil;
+import com.google.devtools.j2objc.util.ExternalAnnotations;
 import com.google.devtools.j2objc.util.FileUtil;
 import com.google.devtools.j2objc.util.HeaderMap;
 import com.google.devtools.j2objc.util.Mappings;
+import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.PackageInfoLookup;
 import com.google.devtools.j2objc.util.PackagePrefixes;
 import com.google.devtools.j2objc.util.SourceVersion;
 import com.google.devtools.j2objc.util.Version;
 import java.io.File;
+import java.io.FileFilter;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.charset.UnsupportedCharsetException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
@@ -43,6 +48,7 @@ import java.util.Set;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 /**
  * The set of tool properties, initialized by the command-line arguments.
@@ -56,7 +62,7 @@ public class Options {
   private List<String> processorPathEntries = new ArrayList<>();
   private OutputLanguageOption language = OutputLanguageOption.OBJECTIVE_C;
   private MemoryManagementOption memoryManagementOption = null;
-  private boolean emitLineDirectives = false;
+  private EmitLineDirectivesOption emitLineDirectives = EmitLineDirectivesOption.NONE;
   private boolean warningsAsErrors = false;
   private boolean deprecatedDeclarations = false;
   private HeaderMap headerMap = new HeaderMap();
@@ -64,17 +70,18 @@ public class Options {
   private boolean segmentedHeaders = true;
   private boolean jsniWarnings = true;
   private boolean buildClosure = false;
-  private boolean stripReflection = false;
-  private boolean stripEnumConstants = false;
+  private EnumSet<MetadataSupport> includedMetadata =
+      EnumSet.of(
+          MetadataSupport.FULL, MetadataSupport.ENUM_CONSTANTS, MetadataSupport.NAME_MAPPING);
   private boolean emitWrapperMethods = true;
   private boolean extractUnsequencedModifications = true;
   private boolean docCommentsEnabled = false;
   private boolean staticAccessorMethods = false;
-  private int batchTranslateMaximum = -1;
+  private boolean classProperties = false;
   private String processors = null;
   private boolean disallowInheritedConstructors = true;
-  private boolean swiftFriendly = false;
   private boolean nullability = false;
+  private boolean defaultNonnull = false;
   private TimingLevel timingLevel = TimingLevel.NONE;
   private boolean dumpAST = false;
   private String lintArgument = null;
@@ -82,15 +89,20 @@ public class Options {
   private boolean translateBootclasspath = false;
   private boolean translateClassfiles = false;
   private String annotationsJar = null;
-  private String globalCombinedOutput = null;
+  private CombinedOutput globalCombinedOutput = null;
   private String bootclasspath = null;
+  private boolean emitKytheMappings = false;
+  private boolean emitSourceHeaders = true;
+  private boolean injectLogSites = false;
 
   private Mappings mappings = new Mappings();
   private FileUtil fileUtil = new FileUtil();
   private PackageInfoLookup packageInfoLookup = new PackageInfoLookup(fileUtil);
   private PackagePrefixes packagePrefixes = new PackagePrefixes(packageInfoLookup);
+  private final ExternalAnnotations externalAnnotations = new ExternalAnnotations();
+  private final List<String> entryClasses = new ArrayList<>();
 
-  private SourceVersion sourceVersion = SourceVersion.defaultVersion();
+  private SourceVersion sourceVersion = null;
 
   private static File proGuardUsageFile = null;
 
@@ -103,13 +115,18 @@ public class Options {
   private static final String HELP_MSG_KEY = "help-message";
   private static final String X_HELP_MSG_KEY = "x-help-message";
   private static final String XBOOTCLASSPATH = "-Xbootclasspath:";
-  private static final String BATCH_PROCESSING_MAX_FLAG = "--batch-translate-max=";
   private static final String TIMING_INFO_ARG = "--timing-info";
+
+  private static final Pattern KNOWN_FILE_SUFFIX_PATTERN
+      = Pattern.compile(".*\\.(java|class|jar|zip)");
 
   // TODO(tball): remove obsolete flags once projects stop using them.
   private static final Set<String> obsoleteFlags = Sets.newHashSet(
+    "--batch-translate-max",
     "--disallow-inherited-constructors",
+    "--extract-unsequenced",
     "--final-methods-as-functions",
+    "--jsni-warnings",
     "--no-final-methods-functions",
     "--hide-private-members",
     "--no-hide-private-members",
@@ -118,6 +135,115 @@ public class Options {
     "--quiet",
     "-Xforce-incomplete-java8"
   );
+  private static final String BATCH_PROCESSING_MAX_FLAG = "--batch-translate-max=";
+
+  /**
+   * Types of memory management to be used by translated code.
+   */
+  public enum MemoryManagementOption { REFERENCE_COUNTING, ARC }
+
+  /**
+   * What languages can be generated.
+   */
+  public enum OutputLanguageOption {
+    OBJECTIVE_C(".m", ".h"),
+    OBJECTIVE_CPLUSPLUS(".mm", ".h"),
+
+    // Test-only language option, for A/B test comparisons.
+    TEST_OBJECTIVE_C(".m2", ".h2");
+
+    private final String suffix;
+    private final String headerSuffix;
+
+    OutputLanguageOption(String suffix, String headerSuffix) {
+      this.suffix = suffix;
+      this.headerSuffix = headerSuffix;
+    }
+
+    public String suffix() {
+      return suffix;
+    }
+
+    public String headerSuffix() {
+      return headerSuffix;
+    }
+  }
+
+  /**
+   * What timing information should be printed, if any.
+   */
+  public enum TimingLevel {
+    // Don't print any timing information.
+    NONE,
+
+    // Print the total execution time at the end.
+    TOTAL,
+
+    // Print all timing information.
+    ALL
+  }
+
+  /**
+   * What reflection support should be generated, if any.
+   */
+  public enum MetadataSupport {
+    // Generate metadata for enum constants.
+    ENUM_CONSTANTS,
+
+    // Generate name mapping.
+    NAME_MAPPING,
+
+    // Generate all metadata.
+    FULL
+  }
+
+  /**
+   * Different ways that #line debug directives can be emitted.
+   */
+  private enum EmitLineDirectivesOption {
+    // Don't emit #line directives.
+    NONE,
+
+    // Emit #line directives using the unmodified source file path of the compilation unit; this may
+    // be an absolute path or a relative path.
+    NORMAL,
+
+    // Emit #line directives using the source file path of the compilation unit converted to a
+    // relative path, relative to the current working directory; if the file is not in a
+    // subdirectory of the current working directory then the emitted path is the same as NORMAL.
+    RELATIVE,
+  }
+
+  /**
+   * Class that holds the information needed to generate combined output, so that all output goes to
+   * a single, named .h/.m file set.
+   */
+  public static class CombinedOutput {
+
+    private final String outputName;
+    private final GenerationUnit combinedUnit;
+
+    CombinedOutput(String outputName, Options options) {
+      this.outputName = outputName;
+      this.combinedUnit = GenerationUnit.newCombinedJarUnit(outputName, options);
+    }
+
+    public String globalCombinedOutputName() {
+      return outputName;
+    }
+
+    public GenerationUnit globalGenerationUnit() {
+      return combinedUnit;
+    }
+  }
+
+  // Flags that are directly forwarded to the javac parser.
+  private static final ImmutableSet<String> PLATFORM_MODULE_SYSTEM_OPTIONS =
+      ImmutableSet.of("--patch-module", "--system", "--add-reads");
+  private final List<String> platformModuleSystemOptions = new ArrayList<>();
+
+  private static final Logger logger = Logger.getLogger("com.google.devtools.j2objc");
+  private boolean logLevelSet = false;
 
   static {
     // Load string resources.
@@ -144,60 +270,24 @@ public class Options {
     }
   }
 
-  public String globalCombinedOutput() {
+  public CombinedOutput globalCombinedOutput() {
     return globalCombinedOutput;
   }
 
-  public void setGlobalCombinedOutput(String globalCombinedOutput) {
-    this.globalCombinedOutput = globalCombinedOutput;
-  }
-
-  /**
-   * Types of memory management to be used by translated code.
-   */
-  public static enum MemoryManagementOption { REFERENCE_COUNTING, ARC }
-
-  /**
-   * What languages can be generated.
-   */
-  public static enum OutputLanguageOption {
-    OBJECTIVE_C(".m"),
-    OBJECTIVE_CPLUSPLUS(".mm");
-
-    private final String suffix;
-
-    OutputLanguageOption(String suffix) {
-      this.suffix = suffix;
-    }
-
-    public String suffix() {
-      return suffix;
-    }
-  }
-
-  /**
-   * What timing information should be printed, if any.
-   */
-  public enum TimingLevel {
-    // Don't print any timing information.
-    NONE,
-
-    // Print the total execution time at the end.
-    TOTAL,
-
-    // Print all timing information.
-    ALL
+  public void setGlobalCombinedOutput(String outputName) {
+    this.globalCombinedOutput = new CombinedOutput(outputName, this);
   }
 
   /**
    * Set all log handlers in this package with a common level.
    */
   private void setLogLevel(Level level) {
-    Logger.getLogger("com.google.devtools.j2objc").setLevel(level);
+    logger.setLevel(level);
+    logLevelSet = true;
   }
 
   public boolean isVerbose() {
-    return Logger.getLogger("com.google.devtools.j2objc").getLevel().equals(Level.FINEST);
+    return logger.getLevel().equals(Level.FINEST);
   }
 
   /**
@@ -207,8 +297,6 @@ public class Options {
    * @throws IOException
    */
   public List<String> load(String[] args) throws IOException {
-    setLogLevel(Level.WARNING);
-
     mappings.addJreMappings();
 
     // Create a temporary directory as the sourcepath's first entry, so that
@@ -217,6 +305,10 @@ public class Options {
 
     ArgProcessor processor = new ArgProcessor();
     processor.processArgs(args);
+    processor.logExpandedArgs(args);
+    if (!logLevelSet) {
+      setLogLevel(Level.WARNING);
+    }
     postProcessArgs();
 
     return processor.sourceFiles;
@@ -224,7 +316,7 @@ public class Options {
 
   private class ArgProcessor {
 
-    private List<String> sourceFiles = new ArrayList<>();
+    private final List<String> sourceFiles = new ArrayList<>();
 
     private void processArgs(String[] args) throws IOException {
       Iterator<String> iter = Arrays.asList(args).iterator();
@@ -238,7 +330,7 @@ public class Options {
         usage("no @ file specified");
       }
       File f = new File(filename);
-      String fileArgs = Files.toString(f, fileUtil.getCharset());
+      String fileArgs = Files.asCharSource(f, fileUtil.getCharset()).read();
       // Simple split on any whitespace, quoted values aren't supported.
       processArgs(fileArgs.split("\\s+"));
     }
@@ -257,11 +349,12 @@ public class Options {
       } else if (arg.startsWith("@")) {
         processArgsFile(arg.substring(1));
       } else if (arg.equals("-classpath") || arg.equals("-cp")) {
-        fileUtil.getClassPathEntries().addAll(getPathArgument(getArgValue(args, arg), true));
+        fileUtil.getClassPathEntries().addAll(getPathArgument(getArgValue(args, arg), true, true));
       } else if (arg.equals("-sourcepath")) {
-        fileUtil.getSourcePathEntries().addAll(getPathArgument(getArgValue(args, arg), false));
+        fileUtil.getSourcePathEntries()
+            .addAll(getPathArgument(getArgValue(args, arg), false, false));
       } else if (arg.equals("-processorpath")) {
-        processorPathEntries.addAll(getPathArgument(getArgValue(args, arg), true));
+        processorPathEntries.addAll(getPathArgument(getArgValue(args, arg), true, false));
       } else if (arg.equals("-d")) {
         fileUtil.setOutputDirectory(new File(getArgValue(args, arg)));
       } else if (arg.equals("--mapping")) {
@@ -299,12 +392,16 @@ public class Options {
         setGlobalCombinedOutput(getArgValue(args, arg));
       } else if (arg.equals("-XincludeGeneratedSources")) {
         headerMap.setIncludeGeneratedSources();
+      } else if (arg.equals("-Xpublic-hdrs")) {
+        fileUtil.setHeaderOutputDirectory(new File(getArgValue(args, arg)));
       } else if (arg.equals("-use-arc")) {
         checkMemoryManagementOption(MemoryManagementOption.ARC);
       } else if (arg.equals("-g")) {
-        emitLineDirectives = true;
+        emitLineDirectives = EmitLineDirectivesOption.NORMAL;
       } else if (arg.equals("-g:none")) {
-        emitLineDirectives = false;
+        emitLineDirectives = EmitLineDirectivesOption.NONE;
+      } else if (arg.equals("-g:relative")) {
+        emitLineDirectives = EmitLineDirectivesOption.RELATIVE;
       } else if (arg.equals("-Werror")) {
         warningsAsErrors = true;
       } else if (arg.equals("--generate-deprecated")) {
@@ -337,9 +434,43 @@ public class Options {
       } else if (arg.equals("--strip-gwt-incompatible")) {
         stripGwtIncompatible = true;
       } else if (arg.equals("--strip-reflection")) {
-        stripReflection = true;
+        includedMetadata = EnumSet.of(MetadataSupport.ENUM_CONSTANTS);
       } else if (arg.equals("-Xstrip-enum-constants")) {
-        stripEnumConstants = true;
+        includedMetadata.remove(MetadataSupport.ENUM_CONSTANTS);
+      } else if (arg.startsWith("--reflection:")) {
+        includedMetadata.remove(MetadataSupport.FULL);
+        String[] subArgs = arg.substring(arg.indexOf(':') + 1).split(",", -1);
+        for (String subArg : subArgs) {
+          switch (subArg) {
+            case "all": {
+              includedMetadata = EnumSet.allOf(MetadataSupport.class);
+              break;
+            }
+            case "none": {
+              includedMetadata = EnumSet.noneOf(MetadataSupport.class);
+              break;
+            }
+            case "enum-constants": {
+              includedMetadata.add(MetadataSupport.ENUM_CONSTANTS);
+              break;
+            }
+            case "-enum-constants": {
+              includedMetadata.remove(MetadataSupport.ENUM_CONSTANTS);
+              break;
+            }
+            case "name-mapping": {
+              includedMetadata.add(MetadataSupport.NAME_MAPPING);
+              break;
+            }
+            case "-name-mapping": {
+              includedMetadata.remove(MetadataSupport.NAME_MAPPING);
+              break;
+            }
+            default: {
+              usage("invalid --reflection argument: " + subArg);
+            }
+          }
+        }
       } else if (arg.equals("--no-wrapper-methods")) {
         emitWrapperMethods = false;
       } else if (arg.equals("--no-segmented-headers")) {
@@ -354,19 +485,24 @@ public class Options {
         docCommentsEnabled = true;
       } else if (arg.equals("--doc-comment-warnings")) {
         reportJavadocWarnings = true;
-      } else if (arg.startsWith(BATCH_PROCESSING_MAX_FLAG)) {
-        batchTranslateMaximum =
-            Integer.parseInt(arg.substring(BATCH_PROCESSING_MAX_FLAG.length()));
       } else if (arg.equals("--static-accessor-methods")) {
         staticAccessorMethods = true;
+      } else if (arg.equals("--class-properties")) {
+        setClassProperties(true);
+      } else if (arg.equals("--no-class-properties")) {
+        setClassProperties(false);
       } else if (arg.equals("--swift-friendly")) {
-        swiftFriendly = true;
+        setSwiftFriendly(true);
       } else if (arg.equals("-processor")) {
         processors = getArgValue(args, arg);
       } else if (arg.equals("--allow-inherited-constructors")) {
         disallowInheritedConstructors = false;
       } else if (arg.equals("--nullability")) {
         nullability = true;
+      } else if (arg.equals("--no-nullability")) {
+        nullability = false;
+      } else if (arg.equals("-Xdefault-nonnull")) {
+        defaultNonnull = true;
       } else if (arg.startsWith("-Xlint")) {
         lintArgument = arg;
       } else if (arg.equals("-Xtranslate-bootclasspath")) {
@@ -377,39 +513,68 @@ public class Options {
         translateClassfiles = true;
       } else if (arg.equals("-Xannotations-jar")) {
         annotationsJar = getArgValue(args, arg);
+      } else if (arg.equals("-Xkythe-mapping")) {
+        emitKytheMappings = true;
+      } else if (arg.equals("-Xno-source-headers")) {
+        emitSourceHeaders = false;
+      } else if (arg.equals("-external-annotation-file")) {
+        addExternalAnnotationFile(getArgValue(args, arg));
+      } else if (arg.equals("--reserved-names")) {
+        NameTable.addReservedNames(getArgValue(args, arg));
       } else if (arg.equals("-version")) {
         version();
       } else if (arg.startsWith("-h") || arg.equals("--help")) {
         help(false);
       } else if (arg.equals("-X")) {
         xhelp();
+      } else if (arg.equals("-XDinjectLogSites=true")) {
+        injectLogSites = true;
       }  else if (arg.equals("-source")) {
         String s = getArgValue(args, arg);
         // Handle aliasing of version numbers as supported by javac.
         try {
           sourceVersion = SourceVersion.parse(s);
-          // TODO(tball): remove when Java 9 source is supported.
-          if (sourceVersion == SourceVersion.JAVA_9) {
-            ErrorUtil.warning("Java 9 source version is not supported, using Java 8.");
-            sourceVersion = SourceVersion.JAVA_8;
-          }
         } catch (IllegalArgumentException e) {
           usage("invalid source release: " + s);
         }
       } else if (arg.equals("-target")) {
         // Dummy out passed target argument, since we don't care about target.
         getArgValue(args, arg);  // ignore
+      } else if (PLATFORM_MODULE_SYSTEM_OPTIONS.contains(arg)) {
+        addPlatformModuleSystemOptions(arg, getArgValue(args, arg));
+      } else if (arg.startsWith(BATCH_PROCESSING_MAX_FLAG)) {
+        // Ignore, batch processing isn't used with javac front-end.
       } else if (obsoleteFlags.contains(arg)) {
         // also ignore
       } else if (arg.startsWith("-")) {
         usage("invalid flag: " + arg);
+      } else if (NameTable.isValidClassName(arg) && !hasKnownFileSuffix(arg)) {
+        // TODO(tball): document entry classes when build is updated to Bazel.
+        entryClasses.add(arg);
       } else {
         sourceFiles.add(arg);
       }
     }
+
+    private void logExpandedArgs(String[] args) throws IOException {
+      StringBuilder sb = new StringBuilder();
+      for (String arg : args) {
+        if (sb.length() > 0) {
+          sb.append(' ');
+        }
+        if (arg.startsWith("@")) {
+          File f = new File(arg.substring(1));
+          sb.append(Files.asCharSource(f, fileUtil.getCharset()).read());
+        } else {
+          sb.append(arg);
+        }
+      }
+      logger.fine(sb.toString());
+    }
   }
 
   private void postProcessArgs() {
+    postProcessSourceVersion();
     // Fix up the classpath, adding the current dir if it is empty, as javac would.
     List<String> classPaths = fileUtil.getClassPathEntries();
     if (classPaths.isEmpty()) {
@@ -431,19 +596,14 @@ public class Options {
           + "-XincludeGeneratedSources");
     }
 
+    // Entry classes are only allowed with --build-closure flag.
+    if (!entryClasses.isEmpty() && !buildClosure) {
+      ErrorUtil.error("entry class names can only be specified with --build-closure flag");
+    }
+
     if (memoryManagementOption == null) {
       memoryManagementOption = MemoryManagementOption.REFERENCE_COUNTING;
     }
-
-    if (swiftFriendly) {
-      staticAccessorMethods = true;
-      nullability = true;
-    }
-
-    // javac performs best when all sources are compiled by one task.
-    // TODO(kstanger): This renders the --batch-translate-max flag useless. It was previously useful
-    // for tuning the JDT parser. We may want to clean and simplify our batching code now.
-    batchTranslateMaximum = Integer.MAX_VALUE;
 
     if (bootclasspath == null) {
       // Set jre_emul.jar as bootclasspath, if available. This ensures that source files
@@ -460,6 +620,28 @@ public class Options {
       // Fall back to Java 8 and earlier property.
       bootclasspath = System.getProperty("sun.boot.class.path", "");
     }
+  }
+
+  private void postProcessSourceVersion() {
+    if (sourceVersion == null) {
+      sourceVersion = SourceVersion.defaultVersion();
+    }
+    SourceVersion maxVersion = SourceVersion.getMaxSupportedVersion();
+    if (sourceVersion.version() > maxVersion.version()) {
+      ErrorUtil.warning("Java " + sourceVersion.version() + " source version is not "
+          + "supported, using Java " + maxVersion.version() + ".");
+      sourceVersion = maxVersion;
+    }
+    if (sourceVersion.version() > 8) {
+      // Allow the modularized JRE to read the J2ObjC annotations (they are in the unnamed module).
+      addPlatformModuleSystemOptions("--add-reads", "java.base=ALL-UNNAMED");
+    } else {
+      platformModuleSystemOptions.clear();
+    }
+  }
+
+  private boolean hasKnownFileSuffix(String s) {
+    return KNOWN_FILE_SUFFIX_PATTERN.matcher(s).matches();
   }
 
   /**
@@ -506,7 +688,8 @@ public class Options {
     System.exit(0);
   }
 
-  private List<String> getPathArgument(String argument, boolean expandAarFiles) {
+  private List<String> getPathArgument(String argument, boolean expandAarFiles,
+      boolean expandWildcard) {
     List<String> entries = new ArrayList<>();
     for (String entry : Splitter.on(File.pathSeparatorChar).split(argument)) {
       if (entry.startsWith("~/")) {
@@ -515,6 +698,17 @@ public class Options {
         entry = System.getProperty("user.home") + entry.substring(1);
       }
       File f = new File(entry);
+      if (f.getName().equals("*") && expandWildcard) {
+        File parent = f.getParentFile() == null ? new File(".") : f.getParentFile();
+        FileFilter jarFilter = file -> file.getName().endsWith(".jar");
+        File[] files = parent.listFiles(jarFilter);
+        if (files != null) {
+          for (File jar : files) {
+            entries.add(jar.toString());
+          }
+        }
+        continue;
+      }
       if (entry.endsWith(".aar") && expandAarFiles) {
         // Extract classes.jar from Android library AAR file.
         f = fileUtil().extractClassesJarFromAarFile(f);
@@ -570,11 +764,21 @@ public class Options {
   }
 
   public boolean emitLineDirectives() {
-    return emitLineDirectives;
+    return emitLineDirectives != EmitLineDirectivesOption.NONE;
   }
 
+  @VisibleForTesting
   public void setEmitLineDirectives(boolean b) {
-    emitLineDirectives = b;
+    emitLineDirectives = b ? EmitLineDirectivesOption.NORMAL : EmitLineDirectivesOption.NONE;
+  }
+
+  public boolean emitRelativeLineDirectives() {
+    return emitLineDirectives == EmitLineDirectivesOption.RELATIVE;
+  }
+
+  @VisibleForTesting
+  public void setEmitRelativeLineDirectives() {
+    emitLineDirectives = EmitLineDirectivesOption.RELATIVE;
   }
 
   public boolean treatWarningsAsErrors() {
@@ -615,7 +819,7 @@ public class Options {
   }
 
   public List<String> getBootClasspath() {
-    return getPathArgument(bootclasspath, false);
+    return getPathArgument(bootclasspath, false, false);
   }
 
   public Mappings getMappings() {
@@ -666,21 +870,48 @@ public class Options {
   }
 
   public boolean stripReflection() {
-    return stripReflection;
+    return !includedMetadata.contains(MetadataSupport.FULL);
   }
 
   @VisibleForTesting
   public void setStripReflection(boolean b) {
-    stripReflection = b;
+    if (b) {
+      includedMetadata.remove(MetadataSupport.FULL);
+      includedMetadata.remove(MetadataSupport.NAME_MAPPING);
+    } else {
+      includedMetadata = EnumSet.allOf(MetadataSupport.class);
+    }
   }
 
   public boolean stripEnumConstants() {
-    return stripEnumConstants;
+    return !includedMetadata.contains(MetadataSupport.ENUM_CONSTANTS);
   }
 
   @VisibleForTesting
   public void setStripEnumConstants(boolean b) {
-    stripEnumConstants = b;
+    if (b) {
+      includedMetadata.remove(MetadataSupport.ENUM_CONSTANTS);
+    } else {
+      includedMetadata.add(MetadataSupport.ENUM_CONSTANTS);
+    }
+  }
+
+  public boolean stripNameMapping() {
+    return !includedMetadata.contains(MetadataSupport.NAME_MAPPING);
+  }
+
+  @VisibleForTesting
+  public void setStripNameMapping(boolean b) {
+    if (b) {
+      includedMetadata.remove(MetadataSupport.NAME_MAPPING);
+    } else {
+      includedMetadata.add(MetadataSupport.NAME_MAPPING);
+    }
+  }
+
+  @VisibleForTesting
+  public void setStripAllReflection() {
+    includedMetadata = EnumSet.noneOf(MetadataSupport.class);
   }
 
   public boolean emitWrapperMethods() {
@@ -701,14 +932,6 @@ public class Options {
     extractUnsequencedModifications = true;
   }
 
-  public int batchTranslateMaximum() {
-    return batchTranslateMaximum;
-  }
-
-  @VisibleForTesting
-  public void setBatchTranslateMaximum(int max) {
-    batchTranslateMaximum = max;
-  }
 
   public SourceVersion getSourceVersion(){
     return sourceVersion;
@@ -717,6 +940,7 @@ public class Options {
   @VisibleForTesting
   public void setSourceVersion(SourceVersion version) {
     sourceVersion = version;
+    postProcessSourceVersion();
   }
 
   public boolean staticAccessorMethods() {
@@ -725,6 +949,16 @@ public class Options {
 
   @VisibleForTesting
   public void setStaticAccessorMethods(boolean b) {
+    staticAccessorMethods = b;
+  }
+
+  public boolean classProperties() {
+    return classProperties;
+  }
+
+  @VisibleForTesting
+  public void setClassProperties(boolean b) {
+    classProperties = b;
     staticAccessorMethods = b;
   }
 
@@ -746,15 +980,10 @@ public class Options {
     disallowInheritedConstructors = b;
   }
 
-  public boolean swiftFriendly() {
-    return swiftFriendly;
-  }
-
   @VisibleForTesting
   public void setSwiftFriendly(boolean b) {
-    swiftFriendly = b;
-    staticAccessorMethods = b;
-    nullability = b;
+    setClassProperties(b);
+    setNullability(b);
   }
 
   public boolean nullability() {
@@ -764,6 +993,16 @@ public class Options {
   @VisibleForTesting
   public void setNullability(boolean b) {
     nullability = b;
+  }
+
+  public boolean defaultNonnull() {
+    return nullability && defaultNonnull;
+  }
+
+  @VisibleForTesting
+  public void setDefaultNonnull(boolean b) {
+    nullability = true;
+    defaultNonnull = b;
   }
 
   public String lintArgument() {
@@ -786,6 +1025,33 @@ public class Options {
     return translateBootclasspath;
   }
 
+  public boolean emitKytheMappings() {
+    return emitKytheMappings;
+  }
+
+  @VisibleForTesting
+  public void setEmitKytheMappings(boolean b) {
+    emitKytheMappings = b;
+  }
+
+  public boolean emitSourceHeaders() {
+    return emitSourceHeaders;
+  }
+
+  @VisibleForTesting
+  public void setEmitSourceHeaders(boolean b) {
+    emitSourceHeaders = b;
+  }
+
+  public ExternalAnnotations externalAnnotations() {
+    return externalAnnotations;
+  }
+
+  @VisibleForTesting
+  public void addExternalAnnotationFile(String file) throws IOException {
+    externalAnnotations.addExternalAnnotationFile(file);
+  }
+
   // Unreleased experimental project.
   public boolean translateClassfiles() {
     return translateClassfiles;
@@ -794,5 +1060,26 @@ public class Options {
   @VisibleForTesting
   public void setTranslateClassfiles(boolean b) {
     translateClassfiles = b;
+  }
+
+  public List<String> entryClasses() {
+    return entryClasses;
+  }
+
+  public void addPlatformModuleSystemOptions(String... flags) {
+    Collections.addAll(platformModuleSystemOptions, flags);
+  }
+
+  public List<String> getPlatformModuleSystemOptions() {
+    return platformModuleSystemOptions;
+  }
+
+  public boolean injectLogSites() {
+    return injectLogSites;
+  }
+
+  @VisibleForTesting
+  public void setInjectLogSites(boolean b) {
+    injectLogSites = b;
   }
 }

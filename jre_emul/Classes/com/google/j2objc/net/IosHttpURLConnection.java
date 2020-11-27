@@ -48,6 +48,7 @@ import java.util.TreeMap;
 #include "com/google/j2objc/net/NSErrorException.h"
 #include "java/lang/Double.h"
 #include "java/net/ConnectException.h"
+#include "java/net/HttpCookie.h"
 #include "java/net/MalformedURLException.h"
 #include "java/net/UnknownHostException.h"
 #include "java/net/SocketTimeoutException.h"
@@ -516,11 +517,16 @@ public class IosHttpURLConnection extends HttpURLConnection {
    * Store any returned cookies.
    */
   private void saveResponseCookies() throws IOException {
+    saveResponseCookies(getURL(), getHeaderFieldsDoNotForceResponse());
+  }
+
+  private static void saveResponseCookies(URL url, Map<String, List<String>> headerFields)
+      throws IOException {
     CookieHandler cookieHandler = CookieHandler.getDefault();
     if (cookieHandler != null) {
       try {
-        URI uri = getURL().toURI();
-        cookieHandler.put(uri, getHeaderFieldsDoNotForceResponse());
+        URI uri = url.toURI();
+        cookieHandler.put(uri, headerFields);
       } catch (URISyntaxException e) {
         throw new IOException(e);
       }
@@ -610,12 +616,13 @@ public class IosHttpURLConnection extends HttpURLConnection {
     // The HttpURLConnection headerFields map uses a null key for Status-Line.
     NSString *statusLine = [NSString stringWithFormat:@"HTTP/1.1 %d %@", responseCode,
         self->responseMessage_];
-    [self addHeaderWithNSString:nil withNSString:statusLine];
+    ComGoogleJ2objcNetIosHttpURLConnection_addHeaderWithNSString_withNSString_(
+        self, nil, statusLine);
 
     // Copy remaining response headers.
     [response.allHeaderFields enumerateKeysAndObjectsUsingBlock:
         ^(id key, id value, BOOL *stop) {
-      [self addHeaderWithNSString:key withNSString:value];
+      ComGoogleJ2objcNetIosHttpURLConnection_addHeaderWithNSString_withNSString_(self, key, value);
     }];
 
     if (response.statusCode >= JavaNetHttpURLConnection_HTTP_BAD_REQUEST) {
@@ -755,7 +762,7 @@ didCompleteWithError:(NSError *)error {
    * Returns an SSLException if that class is linked into the application,
    * otherwise IOException.
    */
-  private static IOException secureConnectionException(String description) {
+  static IOException secureConnectionException(String description) {
     try {
       Class<?> sslExceptionClass = Class.forName("javax.net.ssl.SSLException");
       Constructor<?> constructor = sslExceptionClass.getConstructor(String.class);
@@ -775,12 +782,41 @@ willPerformHTTPRedirection:(NSHTTPURLResponse *)response
    completionHandler:(void (^)(NSURLRequest *))completionHandler {
     if (self->instanceFollowRedirects_
         && [response.URL.scheme isEqualToString:request.URL.scheme]) {
-      completionHandler(request);
+      // Workaround for iOS bug (https://forums.developer.apple.com/thread/43818).
+      NSMutableURLRequest *nextRequest = AUTORELEASE([request mutableCopy]);
+
+      NSString *responseCookies = [response.allHeaderFields objectForKey:@"Set-Cookie"];
+      if (responseCookies) {
+        // Parse cookies and add each of them to iOS request.
+        id<JavaUtilList> cookies = [JavaNetHttpCookie parseWithNSString:responseCookies];
+        for (jint i = 0; i < [cookies size]; i++) {
+          JavaNetHttpCookie *cookie = [cookies getWithInt:i];
+          [nextRequest addValue:[cookie description] forHTTPHeaderField:@"Cookie"];
+        }
+
+        // Add cookies to Java cookie handler.
+        id<JavaUtilMap> headerMap =
+            ComGoogleJ2objcNetIosHttpURLConnection_makeSetCookieHeaderMapWithNSString_(
+                responseCookies);
+        JavaNetURL *redirectURL = [[JavaNetURL alloc] initWithNSString:[response.URL description]];
+        ComGoogleJ2objcNetIosHttpURLConnection_saveResponseCookiesWithJavaNetURL_withJavaUtilMap_(
+            redirectURL, headerMap);
+        RELEASE_(redirectURL);
+      }
+      completionHandler(nextRequest);
     } else {
       completionHandler(nil);
     }
   }
   ]-*/
+
+  private static Map<String, List<String>> makeSetCookieHeaderMap(String cookieHeaderValue) {
+    ArrayList<String> values = new ArrayList<>();
+    values.add(cookieHeaderValue);
+    HashMap<String, List<String>> map = new HashMap<>();
+    map.put("Set-Cookie", values);
+    return map;
+  }
 
   private void addHeader(String k, String v) {
     if (k != null && (k.equalsIgnoreCase("Set-Cookie") || k.equalsIgnoreCase("Set-Cookie2"))) {

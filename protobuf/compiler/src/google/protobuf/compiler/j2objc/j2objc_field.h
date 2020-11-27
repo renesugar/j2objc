@@ -47,6 +47,12 @@ namespace protobuf {
 namespace compiler {
 namespace j2objc {
 
+// Expose for use by ExtensionGenerator.
+void CollectSourceImportsForField(std::set<std::string>* imports,
+                                  const FieldDescriptor* descriptor);
+void GenerateObjcClassRef(
+    io::Printer *printer, const FieldDescriptor *descriptor);
+
 class FieldGenerator {
  public:
   FieldGenerator(const FieldDescriptor *descriptor);
@@ -61,18 +67,21 @@ class FieldGenerator {
   virtual void GenerateMapEntryFieldData(io::Printer *printer) const;
   virtual void GenerateFieldData(io::Printer *printer) const;
 
-  virtual void CollectForwardDeclarations(std::set<string>* declarations) const;
+  virtual void CollectForwardDeclarations(
+      std::set<std::string>* declarations) const;
   virtual void CollectMessageOrBuilderForwardDeclarations(
-      std::set<string>* declarations) const;
-  virtual void CollectSourceImports(std::set<string>* imports) const;
-  virtual void CollectMessageOrBuilderImports(std::set<string>* imports) const;
+      std::set<std::string>* declarations) const;
+  virtual void CollectSourceImports(std::set<std::string>* imports) const;
+  virtual void CollectMessageOrBuilderImports(
+      std::set<std::string>* imports) const;
 
  protected:
   const FieldDescriptor* descriptor_;
-  std::map<string, string> variables_;
+  std::map<std::string, std::string> variables_;
 
   virtual void GenerateFieldDataOffset(io::Printer *printer) const;
   virtual void GenerateClassNameOrMapData(io::Printer *printer) const;
+  virtual void GenerateStaticRefs(io::Printer *printer) const;
 
  private:
   GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(FieldGenerator);
@@ -89,8 +98,6 @@ class SingleFieldGenerator : public FieldGenerator {
   virtual void GenerateMessageOrBuilderProtocol(io::Printer* printer) const;
 
   virtual void GenerateDeclaration(io::Printer* printer) const;
-
-  virtual void CollectSourceImports(std::set<string>* imports) const;
 
  private:
   GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(SingleFieldGenerator);
@@ -110,10 +117,12 @@ class RepeatedFieldGenerator : public FieldGenerator {
 
   virtual void GenerateDeclaration(io::Printer* printer) const;
 
-  virtual void CollectForwardDeclarations(std::set<string>* declarations) const;
+  virtual void CollectForwardDeclarations(
+      std::set<std::string>* declarations) const;
   virtual void CollectMessageOrBuilderForwardDeclarations(
-      std::set<string>* declarations) const;
-  virtual void CollectMessageOrBuilderImports(std::set<string>* imports) const;
+      std::set<std::string>* declarations) const;
+  virtual void CollectMessageOrBuilderImports(
+      std::set<std::string>* imports) const;
 
  private:
   GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(RepeatedFieldGenerator);
@@ -122,7 +131,7 @@ class RepeatedFieldGenerator : public FieldGenerator {
 class MapFieldGenerator : public FieldGenerator {
  public:
   MapFieldGenerator(
-      const FieldDescriptor *descriptor, uint32_t entry_fields_idx);
+      const FieldDescriptor *descriptor, uint32_t map_fields_idx);
 
   virtual ~MapFieldGenerator() { }
 
@@ -131,17 +140,20 @@ class MapFieldGenerator : public FieldGenerator {
   virtual void GenerateDeclaration(io::Printer* printer) const;
   virtual void GenerateMapEntryFieldData(io::Printer *printer) const;
 
-  virtual void CollectForwardDeclarations(std::set<string>* declarations) const;
+  virtual void CollectForwardDeclarations(
+      std::set<std::string>* declarations) const;
   virtual void CollectMessageOrBuilderForwardDeclarations(
-      std::set<string>* declarations) const;
-  virtual void CollectSourceImports(std::set<string>* imports) const;
+      std::set<std::string>* declarations) const;
+  virtual void CollectSourceImports(std::set<std::string>* imports) const;
 
  protected:
   virtual void GenerateClassNameOrMapData(io::Printer *printer) const;
+  virtual void GenerateStaticRefs(io::Printer *printer) const;
 
  private:
   const FieldDescriptor* key_field_;
   const FieldDescriptor* value_field_;
+  const uint32_t entry_fields_idx_;
 
   GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(MapFieldGenerator);
 };
@@ -159,6 +171,7 @@ class MapEntryFieldGenerator : public FieldGenerator {
 
  protected:
   virtual void GenerateFieldDataOffset(io::Printer *printer) const;
+  virtual void GenerateStaticRefs(io::Printer *printer) const;
 
  private:
   GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(MapEntryFieldGenerator);

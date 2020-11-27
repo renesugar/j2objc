@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -164,7 +164,7 @@ public class LoggingSupport {
         if (format != null) {
             try {
                 // validate the user-defined format string
-                String.format(format, new Date(), "", "", "", "", "");
+                String unused = String.format(format, new Date(), "", "", "", "", "");
             } catch (IllegalArgumentException e) {
                 // illegal syntax; fall back to the default format
                 format = DEFAULT_FORMAT;

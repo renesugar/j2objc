@@ -14,7 +14,6 @@
 #
 # Author: Tom Ball
 
-.SUFFIXES:
 .PHONY: default j2objc clean
 
 include environment.mk
@@ -22,9 +21,11 @@ include java_sources.mk
 
 JAVA_SOURCE_LIST = $(BUILD_DIR)/junit.classes.list
 EXTRACTED_JAVA = $(JUNIT_SOURCES:%=$(JAVA_SRC_DIR)/%) \
+    $(JUNIT_DATAPROVIDER_SOURCES:%=$(JAVA_SRC_DIR)/%) \
     $(HAMCREST_SOURCES:%=$(JAVA_SRC_DIR)/%)
 PUBLIC_HEADERS = \
     $(JUNIT_SOURCES:%.java=%.h) \
+    $(JUNIT_DATAPROVIDER_SOURCES:%.java=%.h) \
     $(HAMCREST_SOURCES:%.java=%.h)
 ARCH_HEADERS = $(PUBLIC_HEADERS:%=$(ARCH_INCLUDE_DIR)/%)
 
@@ -46,8 +47,8 @@ FAT_LIB_SOURCE_DIRS = $(GEN_OBJC_DIR)
 FAT_LIB_COMPILE = $(CLANG) $(OBJCFLAGS) -I$(GEN_OBJC_DIR) -I$(ARCH_INCLUDE_DIR)
 include ../make/fat_lib.mk
 
-STATIC_FRAMEWORK_NAME = JUnit
-include ../make/static_framework.mk
+FRAMEWORK_NAME = JUnit
+include ../make/framework.mk
 
 JUNIT_LICENSE = LICENSE
 JUNIT_LICENSE_DIST = $(DIST_LICENSE_DIR)/junit_license.txt
@@ -60,10 +61,14 @@ java: $(JUNIT_DIST_JAR)
 lib: $(FAT_LIBS)
 	@:
 
-$(BUILD_DIR)/.extracted: $(JUNIT_SRC_JAR) $(HAMCREST_SRC_JAR)
+$(BUILD_DIR)/.extracted: $(JUNIT_SRC_JAR) $(JUNIT_DATAPROVIDER_SRC_JAR) $(HAMCREST_SRC_JAR)
 	@echo extracting sources
 	@mkdir -p $(JAVA_SRC_DIR)
 	@unzip -q -o -d $(JAVA_SRC_DIR) $(JUNIT_SRC_JAR) $(JUNIT_SOURCES)
+	@unzip -q -o -d $(JAVA_SRC_DIR) $(JUNIT_DATAPROVIDER_SRC_JAR) $(JUNIT_DATAPROVIDER_SOURCES)
+	# Removing import that does not impact functionality and just adds another dependency.
+	@sed -i '' -e '/import edu.umd.cs.findbugs.annotations.SuppressWarnings;/d' \
+		$(JAVA_SRC_DIR)/com/tngtech/java/junit/dataprovider/internal/placeholder/ParameterPlaceholder.java
 	@unzip -q -o -d $(JAVA_SRC_DIR) $(HAMCREST_SRC_JAR) $(HAMCREST_SOURCES)
 	@touch $(EXTRACTED_JAVA)
 	@touch $@
@@ -103,7 +108,7 @@ $(BUILD_DIR):
 clean:
 	@rm -rf $(BUILD_DIR) $(FAT_LIBS_DIST) $(JUNIT_LICENSE_DIST)
 	@rm -rf $(ARCH_INCLUDE_DIR)/junit $(ARCH_INCLUDE_DIR)/org/junit
-	@rm -rf $(STATIC_FRAMEWORK_DIR)
+	@rm -rf $(FRAMEWORK_DIR)
 
 dist: lib $(FAT_LIBS_DIST) $(ARCH_HEADERS) $(JUNIT_LICENSE_DIST)
 
@@ -111,6 +116,6 @@ dist: lib $(FAT_LIBS_DIST) $(ARCH_HEADERS) $(JUNIT_LICENSE_DIST)
 # can't compile with < 1.8.
 find_cycles: $(JAVA_SOURCES_MANIFEST) | cycle_finder_dist jre_emul_java_manifest
 	$(DIST_DIR)/cycle_finder -sourcepath $(JAVA_SRC_DIR) -source 1.7 \
-      -cp $(CLASSPATH) -w cycle_whitelist.txt -w ../jre_emul/cycle_whitelist.txt \
+      -cp $(CLASSPATH) --suppress-list cycle_suppress_list.txt \
+			--suppress-list ../jre_emul/cycle_suppress_list.txt \
       -s ../jre_emul/$(BUILD_DIR_NAME)/java_sources.mf -s $(JAVA_SOURCES_MANIFEST)
-

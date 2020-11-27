@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -95,7 +95,7 @@ public class BufferedWriter extends Writer {
      * @param  out  A Writer
      * @param  sz   Output-buffer size, a positive integer
      *
-     * @exception  IllegalArgumentException  If sz is <= 0
+     * @exception  IllegalArgumentException  If {@code sz <= 0}
      */
     public BufferedWriter(Writer out, int sz) {
         super(out);
@@ -106,7 +106,8 @@ public class BufferedWriter extends Writer {
         nChars = sz;
         nextChar = 0;
 
-        lineSeparator = System.getProperty("line.separator");
+        lineSeparator = java.security.AccessController.doPrivileged(
+                new sun.security.action.GetPropertyAction("line.separator"));
     }
 
     /** Checks to make sure that the stream has not been closed */
@@ -254,15 +255,15 @@ public class BufferedWriter extends Writer {
         }
     }
 
+    @SuppressWarnings("try")
     public void close() throws IOException {
         synchronized (lock) {
             if (out == null) {
                 return;
             }
-            try {
+            try (Writer w = out) {
                 flushBuffer();
             } finally {
-                out.close();
                 out = null;
                 cb = null;
             }

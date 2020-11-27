@@ -64,11 +64,14 @@ EnumGenerator::EnumGenerator(const EnumDescriptor* descriptor)
 EnumGenerator::~EnumGenerator() {
 }
 
-void EnumGenerator::CollectSourceImports(std::set<string>* imports) const {
+void EnumGenerator::CollectSourceImports(std::set<std::string>* imports) const {
   imports->insert("java/lang/IllegalArgumentException.h");
 }
 
 void EnumGenerator::GenerateHeader(io::Printer* printer) {
+  printer->Print(
+    "\nJ2OBJC_CLASS_DECLARATION($classname$);\n",
+    "classname", ClassName(descriptor_));
   printer->Print(
     "\ntypedef NS_ENUM(NSUInteger, $classname$) {\n",
     "classname", CEnumName(descriptor_));
@@ -115,23 +118,22 @@ void EnumGenerator::GenerateHeader(io::Printer* printer) {
       "/*! INTERNAL ONLY - Use enum accessors declared below. */\n"
       "FOUNDATION_EXPORT $classname$ *$classname$_values_[];\n"
       "\n"
-      "FOUNDATION_EXPORT IOSObjectArray *$classname$_values();\n"
+      "FOUNDATION_EXPORT IOSObjectArray *$classname$_values(void);\n"
       "FOUNDATION_EXPORT $classname$ *$classname$_valueOfWithNSString_("
-          "NSString *name);\n"
+      "NSString *name);\n"
       "FOUNDATION_EXPORT $classname$ *$classname$_valueOfWithInt_("
-          "jint value);\n"
+      "jint value);\n"
       "FOUNDATION_EXPORT $classname$ *$classname$_forNumberWithInt_("
-          "jint value);\n"
+      "jint value);\n"
       "FOUNDATION_EXPORT $classname$ *$classname$_fromOrdinal("
-          "NSUInteger ordinal);\n\n",
+      "NSUInteger ordinal);\n\n",
       "classname", ClassName(descriptor_));
 
   for (int i = 0; i < canonical_values_.size(); i++) {
     printer->Print(
-        "inline $classname$ *$classname$_get_$name$();\n"
-        "J2OBJC_ENUM_CONSTANT($classname$, $name$)\n",
-        "classname", ClassName(descriptor_),
-        "name", canonical_values_[i]->name());
+        "FOUNDATION_EXPORT $classname$ *$classname$_get_$name$(void);\n",
+        "classname", ClassName(descriptor_), "name",
+        canonical_values_[i]->name());
   }
 }
 
@@ -143,8 +145,8 @@ void EnumGenerator::GenerateSource(io::Printer* printer) {
       "\n"
       "$classname$ *$classname$_values_[$count$];\n"
       "\n"
-      "static ComGoogleProtobufDescriptors_EnumDescriptor"
-          " *$classname$_descriptor = nil;\n"
+      "ComGoogleProtobufDescriptors_EnumDescriptor"
+          " *$classname$_descriptor_ = nil;\n"
       "\n"
       "@implementation $classname$\n"
       "\n"
@@ -157,7 +159,7 @@ void EnumGenerator::GenerateSource(io::Printer* printer) {
   // Count characters and only add line breaks when the line exceeds the max.
   int row_chars = kMaxRowChars + 1;
   for (int i = 0; i < canonical_values_.size(); i++) {
-    string name = canonical_values_[i]->name();
+    std::string name = canonical_values_[i]->name();
     size_t added_chars = name.length() + 5;
     if (row_chars + added_chars > kMaxRowChars) {
       printer->Print("\n     ");
@@ -171,7 +173,7 @@ void EnumGenerator::GenerateSource(io::Printer* printer) {
       "    static jint int_values[] = {");
   row_chars = kMaxRowChars + 1;
   for (int i = 0; i < canonical_values_.size(); i++) {
-    string value = SimpleItoa(canonical_values_[i]->number());
+    std::string value = SimpleItoa(canonical_values_[i]->number());
     size_t added_chars = value.length() + 2;
     if (row_chars + added_chars > kMaxRowChars) {
       printer->Print("\n     ");
@@ -181,11 +183,12 @@ void EnumGenerator::GenerateSource(io::Printer* printer) {
     row_chars += added_chars;
   }
 
-  printer->Print("\n"
+  printer->Print(
+      "\n"
       "    };\n"
-      "    $classname$_descriptor = "
-          "CGPInitializeEnumType(self, $count$, $classname$_values_, names,"
-          " int_values);\n"
+      "    $classname$_descriptor_ = "
+      "CGPInitializeEnumType(self, $count$, $classname$_values_, names,"
+      " int_values);\n"
       "    J2OBJC_SET_INITIALIZED($classname$)\n"
       "  }\n"
       "}\n"
@@ -211,22 +214,22 @@ void EnumGenerator::GenerateSource(io::Printer* printer) {
       "}\n"
       "\n"
       "+ (ComGoogleProtobufDescriptors_EnumDescriptor *)getDescriptor {\n"
-      "  return $classname$_descriptor;\n"
+      "  return $classname$_descriptor_;\n"
       "}\n"
       "\n"
       "- (ComGoogleProtobufDescriptors_EnumValueDescriptor *)"
-          "getValueDescriptor {\n"
-      "  return $classname$_descriptor->values_->buffer_[[self ordinal]];\n"
+      "getValueDescriptor {\n"
+      "  return $classname$_descriptor_->values_->buffer_[[self ordinal]];\n"
       "}\n"
       "\n"
       "@end\n"
       "\n"
       "J2OBJC_CLASS_TYPE_LITERAL_SOURCE($classname$)\n"
       "\n"
-      "IOSObjectArray *$classname$_values() {\n"
+      "IOSObjectArray *$classname$_values(void) {\n"
       "  $classname$_initialize();"
       "  return [IOSObjectArray arrayWithObjects:$classname$_values_"
-          " count:$count$ type:$classname$_class_()];\n"
+      " count:$count$ type:$classname$_class_()];\n"
       "}\n"
       "\n"
       "$classname$ *$classname$_valueOfWithNSString_(NSString *name) {\n"
@@ -238,7 +241,7 @@ void EnumGenerator::GenerateSource(io::Printer* printer) {
       "    }\n"
       "  }\n"
       "  @throw create_JavaLangIllegalArgumentException_initWithNSString_("
-          "name);\n"
+      "name);\n"
       "}\n"
       "\n"
       "$classname$ *$classname$_valueOfWithInt_(jint value) {\n"
@@ -263,8 +266,18 @@ void EnumGenerator::GenerateSource(io::Printer* printer) {
       "  }\n"
       "  return $classname$_values_[ordinal];\n"
       "}\n",
-      "classname", ClassName(descriptor_),
-      "count", SimpleItoa(canonical_values_.size()));
+      "classname", ClassName(descriptor_), "count",
+      SimpleItoa(canonical_values_.size()));
+
+  for (int i = 0; i < canonical_values_.size(); i++) {
+    printer->Print(
+        "\n$classname$ *$classname$_get_$name$(void) {\n"
+        "  $classname$_initialize();\n"
+        "  return $classname$_values_[$classname$_Enum_$name$];\n"
+        "}\n",
+        "classname", ClassName(descriptor_),
+        "name", canonical_values_[i]->name());
+  }
 }
 
 }  // namespace j2objc

@@ -21,6 +21,7 @@
 
 #import "NSObject+JavaObject.h"
 #import "IOSClass.h"
+#import "com/google/j2objc/util/ReflectionUtil.h"
 #import "java/lang/CloneNotSupportedException.h"
 #import "java/util/ArrayList.h"
 #import "java/util/List.h"
@@ -39,16 +40,20 @@
 
 - (void)testGetClass {
   // Test with class.
-  JavaUtilArrayList *one = [[[JavaUtilArrayList alloc] init] autorelease];
+  JavaUtilArrayList *one = AUTORELEASE([[JavaUtilArrayList alloc] init]);
   IOSClass *clazz = [one java_getClass];
-  XCTAssertEqualObjects([clazz getName], @"java.util.ArrayList",
-                 @"incorrect class name", nil);
+  jboolean result =
+      ComGoogleJ2objcUtilReflectionUtil_matchClassNamePrefixWithNSString_withNSString_(
+          [clazz getName], @"java.util.ArrayList");
+  XCTAssertTrue(result, @"incorrect class name");
 
   // Now with a protocol.
-  id<JavaUtilList> two = [[[JavaUtilArrayList alloc] init] autorelease];
+  id<JavaUtilList> two = AUTORELEASE([[JavaUtilArrayList alloc] init]);
   clazz = [(id<JavaObject>) two java_getClass];
-  XCTAssertEqualObjects([clazz getName], @"java.util.ArrayList",
-                 @"incorrect class name", nil);
+  result =
+      ComGoogleJ2objcUtilReflectionUtil_matchClassNamePrefixWithNSString_withNSString_(
+          [clazz getName], @"java.util.ArrayList");
+  XCTAssertTrue(result, @"incorrect class name");
 }
 
 @end

@@ -1,6 +1,4 @@
 /*
- * Copyright 2011 Google Inc. All Rights Reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -33,6 +31,9 @@ import java.util.Objects;
  */
 public class StackTraceElement implements Serializable {
 
+  public static final String UNKNOWN = "<unknown>";
+  public static final String STRIPPED = "<stripped>";
+
   private String declaringClass;
   private String methodName;
   private String fileName;
@@ -60,27 +61,37 @@ public class StackTraceElement implements Serializable {
   }
 
   public StackTraceElement(String className, String methodName, String fileName, int lineNumber) {
-    this.declaringClass = className;
-    this.methodName = methodName;
+    this.declaringClass = Objects.requireNonNull(className, "Declaring class is null");
+    this.methodName = Objects.requireNonNull(methodName, "Method name is null");
     this.fileName = fileName;
     this.lineNumber = lineNumber;
   }
 
   StackTraceElement(long address) {
-    this(null, null, null, -1);
+    this.declaringClass = UNKNOWN;
+    this.methodName = UNKNOWN;
+    this.fileName = null;
+    this.lineNumber = -1;
+    if (address == 0L) {
+      throw new IllegalArgumentException("Stack frame address is zero");
+    }
     this.address = address;
   }
 
+  @Override
   public String toString() {
     initializeFromAddress();
+    boolean strippedClass = declaringClass.startsWith(STRIPPED);
     StringBuilder sb = new StringBuilder();
-    sb.append(hexAddress);
-    sb.append(" ");
-    if (declaringClass != null) {
+    if (hexAddress != null) {
+      sb.append(hexAddress);
+      sb.append(" ");
+    }
+    if (!strippedClass) {
       sb.append(declaringClass);
       sb.append('.');
     }
-    if (methodName != null) {
+    if (!methodName.equals(STRIPPED)) {
       sb.append(methodName);
     }
     if (fileName != null || lineNumber != -1) {
@@ -93,7 +104,7 @@ public class StackTraceElement implements Serializable {
         sb.append(lineNumber);
       }
       sb.append(')');
-    } else if (declaringClass != null) {
+    } else if (!strippedClass) {
       sb.append("()");
     }
     if (offset != null) {
@@ -122,25 +133,32 @@ public class StackTraceElement implements Serializable {
    *         {@code StackTraceElement} instance representing the same
    *         execution point as this instance.
    */
+  @Override
   public boolean equals(Object obj) {
-      if (obj==this)
-          return true;
-      if (!(obj instanceof StackTraceElement))
-          return false;
-      StackTraceElement e = (StackTraceElement)obj;
-      return e.declaringClass.equals(declaringClass) &&
-          e.lineNumber == lineNumber &&
-          Objects.equals(methodName, e.methodName) &&
-          Objects.equals(fileName, e.fileName);
+      if (obj == this) {
+        return true;
+      }
+      if (!(obj instanceof StackTraceElement)) {
+        return false;
+      }
+      StackTraceElement e = (StackTraceElement) obj;
+      initializeFromAddress();
+      e.initializeFromAddress();
+      return e.declaringClass.equals(declaringClass)
+          && e.lineNumber == lineNumber
+          && Objects.equals(methodName, e.methodName)
+          && Objects.equals(fileName, e.fileName);
   }
 
   /**
    * Returns a hash code value for this stack trace element.
    */
+  @Override
   public int hashCode() {
-      int result = 31*declaringClass.hashCode() + methodName.hashCode();
-      result = 31*result + Objects.hashCode(fileName);
-      result = 31*result + lineNumber;
+      initializeFromAddress();
+      int result = 31 * declaringClass.hashCode() + methodName.hashCode();
+      result = 31 * result + Objects.hashCode(fileName);
+      result = 31 * result + lineNumber;
       return result;
   }
 
@@ -203,7 +221,7 @@ public class StackTraceElement implements Serializable {
         break;
       }
       if (!ignoreName) {
-        NSString *name = 
+        NSString *name =
             [[NSString alloc] initWithBytes:lenEnd length:len encoding:NSASCIIStringEncoding];
         [names addObject:name];
         RELEASE_(name);
@@ -225,7 +243,8 @@ public class StackTraceElement implements Serializable {
    * Implements lazy loading of symbol information from application.
    */
   private native void initializeFromAddress() /*-[
-    if (self->address_ == 0L || self->methodName_) {
+    if (self->address_ == 0L     // Is there an address to initialze from?
+        || self->hexAddress_) {  // Already initialized?
       return;
     }
     void *shortStack[1];
@@ -279,10 +298,11 @@ public class StackTraceElement implements Serializable {
         if (idx == start) {
           break;
         }
-        NSString *className = [[[NSString alloc] initWithBytesNoCopy:start
-                                                              length:idx - start
-                                                            encoding:encoding
-                                                        freeWhenDone:false] autorelease];
+        NSString *className =
+            AUTORELEASE([[NSString alloc] initWithBytesNoCopy:start
+                                                       length:idx - start
+                                                     encoding:encoding
+                                                 freeWhenDone:false]);
         cls = [IOSClass classForIosName:className];
       }
       if (cls) {
@@ -294,9 +314,16 @@ public class StackTraceElement implements Serializable {
         // populated.
         DemangleSwiftMethod(self, start);
       }
-      if (!self->methodName_) {
+      if ([self->methodName_ isEqual:JavaLangStackTraceElement_UNKNOWN]) {
         self->methodName_ = ExtractMethodName(start, '_', encoding);
       }
+    }
+    if ([self->declaringClass_ isEqual:JavaLangStackTraceElement_UNKNOWN]) {
+      self->declaringClass_ = [[NSString alloc] initWithFormat:@"%@ %@",
+          JavaLangStackTraceElement_STRIPPED, self->hexAddress_];
+    }
+    if ([self->methodName_ isEqual:JavaLangStackTraceElement_UNKNOWN]) {
+      self->methodName_ = JavaLangStackTraceElement_STRIPPED;
     }
     free(stackSymbol);
   ]-*/;

@@ -17,6 +17,7 @@
 package com.google.devtools.j2objc.gen;
 
 import com.google.devtools.j2objc.GenerationTest;
+import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.Options.MemoryManagementOption;
 import java.io.IOException;
 import javax.tools.ToolProvider;
@@ -262,7 +263,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
     assertTranslation(translation, "id fieldJar_;");
     assertTranslation(translation, "int newFieldBar_;");
     assertTranslation(translation, "id fieldFoo_;");
-    assertTranslation(translation, "__unsafe_unretained id fieldJar_;");
+    assertTranslation(translation, "WEAK_ id fieldJar_;");
     assertTranslation(translation, "int newFieldBar_;");
     assertTranslation(translation, "J2OBJC_STATIC_FIELD_PRIMITIVE(FooBar, fieldPhi, jint)");
   }
@@ -582,7 +583,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
     assertTranslatedLines(translation,
         "- (NSUInteger)countByEnumeratingWithState:(NSFastEnumerationState *)state "
         + "objects:(__unsafe_unretained id *)stackbuf count:(NSUInteger)len {",
-        "return JreDefaultFastEnumeration(self, state, stackbuf, len);",
+        "return JreDefaultFastEnumeration(self, state, stackbuf);",
         "}");
   }
 
@@ -609,9 +610,9 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
     assertTranslation(translation, "#define Test_I 5");
     assertTranslation(translation, "FOUNDATION_EXPORT NSString *Test_FOO;");
     assertTranslation(translation, "J2OBJC_STATIC_FIELD_OBJ_FINAL(Test, FOO, NSString *)");
+    assertTranslation(translation, "@interface Test : NSObject");
     translation = getTranslatedFile("Test.m");
     assertTranslation(translation, "NSString *Test_FOO = @\"foo\";");
-    assertTranslation(translation, "@interface Test : NSObject");
   }
 
   public void testCombinedGeneration() throws IOException {
@@ -697,6 +698,8 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
     assertTranslation(translation, "@compatibility_alias FooBarMumbleTest FBMTest;");
     translation = getTranslatedFile("foo/bar/mumble/Test.m");
     assertTranslation(translation, "@implementation FBMTest");
+    assertTranslation(translation,
+        "J2OBJC_NAME_MAPPING(FBMTest, \"foo.bar.mumble\", \"FBM\")");
     assertNotInTranslation(translation, "FooBarMumbleTest");
   }
 
@@ -714,6 +717,8 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
     assertTranslation(translation, "@compatibility_alias FooBarMumbleTest FBMTest;");
     translation = getTranslatedFile("foo/bar/mumble/Test.m");
     assertTranslation(translation, "@implementation FBMTest");
+    assertTranslation(translation,
+        "J2OBJC_NAME_MAPPING(FBMTest, \"foo.bar.mumble\", \"FBM\")");
     assertNotInTranslation(translation, "FooBarMumbleTest");
   }
 
@@ -735,6 +740,8 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
     assertTranslation(translation, "@compatibility_alias FooBarMumbleTest FBMTest;");
     translation = getTranslatedFile("foo/bar/mumble/Test.m");
     assertTranslation(translation, "@implementation FBMTest");
+    assertTranslation(translation,
+        "J2OBJC_NAME_MAPPING(FBMTest, \"foo.bar.mumble\", \"FBM\")");
     assertNotInTranslation(translation, "FooBarMumbleTest");
   }
 
@@ -767,13 +774,22 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
 
   public void testReservedWordAsAnnotationPropertyName() throws IOException {
     String translation = translateSourceFile(
-        "package foo; import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) "
-        + "public @interface Bar { String namespace() default \"\"; } "
-        + "class Test { Bar ann; String namespace() { return ann.namespace(); }}",
+        "package foo; "
+            + "import java.lang.annotation.*; "
+            + "@Retention(RetentionPolicy.RUNTIME) "
+            + "public @interface Bar { "
+            + "  String in() default \"XYZ\"; "
+            + "  String namespace() default \"\"; "
+            + "} "
+            + "class Test { Bar ann; String namespace() { return ann.namespace(); }}",
         "Bar", "foo/Bar.m");
+    assertTranslation(translation, "@synthesize in = in_;");
     assertTranslation(translation, "@synthesize namespace__ = namespace___;");
-    assertTranslation(translation, "id<FooBar> create_FooBar(NSString *namespace__) {");
+    assertTranslation(translation,
+        "id<FooBar> create_FooBar(NSString *inArg, NSString *namespace__) {");
+    assertTranslation(translation, "self->in_ = RETAIN_(inArg);");
     assertTranslation(translation, "self->namespace___ = RETAIN_(namespace__);");
+    assertTranslation(translation, "+ (NSString *)inDefault {");
     assertTranslation(translation, "+ (NSString *)namespace__Default {");
   }
 
@@ -814,12 +830,140 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
     assertTranslation(translation, "create_A_Outer(create_A_Inner(@\"Bar\"))");
   }
 
-  public void testForwradDeclarationForPrivateAbstractDeclaration() throws IOException {
+  public void testForwardDeclarationForPrivateAbstractDeclaration() throws IOException {
     // We need a forward declaration of JavaLangInteger for the type narrowing declaration of get()
     // in the private class B.
     String translation = translateSourceFile(
         "class Test { static class A <T> { T get() { return null; } }"
         + "private static class B extends A<Integer> { } }", "Test", "Test.m");
     assertTranslation(translation, "@class JavaLangInteger;");
+  }
+
+  public void testNameMappingStripped() throws IOException {
+    options.setStripNameMapping(true);
+    String translation = translateSourceFile(
+        "@com.google.j2objc.annotations.ObjectiveCName(\"NSTest\") public class Test {}",
+        "Test", "Test.m");
+    assertNotInTranslation(translation, "J2OBJC_NAME_MAPPING");
+  }
+
+  public void testNameMappingNotStripped() throws IOException {
+    options.setStripReflection(true);
+    options.setStripNameMapping(false);
+    String translation = translateSourceFile(
+        "@com.google.j2objc.annotations.ObjectiveCName(\"NSTest\") public class Test {}",
+        "Test", "Test.m");
+    assertTranslation(translation, "J2OBJC_NAME_MAPPING(NSTest, \"Test\", \"NSTest\")");
+  }
+
+  public void testNameMappingNestedClass() throws IOException {
+    String hFile =
+        translateSourceFile(
+            "package foo; "
+                + "import com.google.j2objc.annotations.ObjectiveCName; "
+                + "public class Outer { "
+                + "@ObjectiveCName(\"Renamed\") public class Inner {} "
+                + "}",
+            "foo.Outer",
+            "foo/Outer.h");
+    String mFile = getTranslatedFile("foo/Outer.m");
+    // Validate Outer class.
+    assertTranslation(hFile, "@interface FooOuter");
+    assertTranslation(mFile, "@implementation FooOuter");
+    // Validate Inner class.
+    assertTranslation(hFile, "@interface Renamed");
+    assertTranslation(mFile, "@implementation Renamed");
+    assertTranslation(
+        mFile, "J2OBJC_NAME_MAPPING(Renamed, \"foo.Outer$Inner\", \"Renamed\")");
+    assertNotInTranslation(mFile, "FooOuter_Inner");
+    // Make sure that the only class mapping is the one for the inner class.
+    assertOccurrences(mFile, "J2OBJC_NAME_MAPPING", 1);
+  }
+
+  /**
+   * The following scenarios should not generate name mappings: package-info files, lambdas and
+   * anonymous classes.
+   */
+  public void testCasesWithoutNameMapping() throws IOException {
+    addSourceFile(
+        "@ObjectiveCName(\"FBM\")\n"
+            + "package foo.bar.mumble;\n"
+            + "import com.google.j2objc.annotations.ObjectiveCName;",
+        "foo/bar/mumble/package-info.java");
+    String mFile =
+        translateSourceFile(
+            "package foo.bar.mumble; "
+                + "public class Test { "
+                + "  Runnable r = () -> {}; "  // lambda
+                + "  Runnable s = new Runnable() { "  // anonymous
+                + "    @Override public void run() {} "
+                + "  }; "
+                + "  public void method() { "
+                + "    Runnable unused = new Runnable() {"  // local anonymous
+                + "      @Override public void run() {} "
+                + "    };"
+                + "  } "
+                + "}",
+            "foo.bar.mumble.Test",
+            "foo/bar/mumble/Test.m");
+    assertTranslation(
+        mFile, "J2OBJC_NAME_MAPPING(FBMTest, \"foo.bar.mumble\", \"FBM\")");
+    assertOccurrences(mFile, "J2OBJC_NAME_MAPPING", 1);
+    // The ObjectiveCName annotation affects classes in the package but not the package itself.
+    String translation =
+        translateSourceFile("foo.bar.mumble.package-info", "foo/bar/mumble/package-info.m");
+    assertTranslation(translation, "FooBarMumblepackage_info");
+    assertNotInTranslation(translation, "FBMpackage_info");
+    assertNotInTranslation(translation, "J2OBJC_NAME_MAPPING");
+  }
+
+  //  Verifies that the error test and message lines are generated for ARC when
+  //  using ARC as Memory Management Option
+  public void testErrorTestAndMessageLinesGeneratedWithARC() throws IOException {
+    options.setMemoryManagementOption(Options.MemoryManagementOption.ARC);
+    String translation =
+        translateSourceFile(
+            "package foo.bar; public class A { public A(int i) {} A() {} }",
+            "foo.bar.A",
+            "foo/bar/A.m");
+
+    assertTranslation(
+        translation,
+        "#if !__has_feature(objc_arc)\n"
+            + "#error \"foo/bar/A must be compiled with ARC (-fobjc-arc)\"\n"
+            + "#endif");
+  }
+
+  //  Verifies that the error test and message lines are generated for Reference Counting
+  //  when using Reference Counting as Memory Management Option
+  public void testErrorTestAndMessageLinesGeneratedWithReferenceCounting() throws IOException {
+    options.setMemoryManagementOption(Options.MemoryManagementOption.REFERENCE_COUNTING);
+    String translation =
+        translateSourceFile(
+            "package foo.bar; public class A { public A(int i) {} A() {} }",
+            "foo.bar.A",
+            "foo/bar/A.m");
+
+    assertTranslation(
+        translation,
+        "#if __has_feature(objc_arc)\n"
+            + "#error \"foo/bar/A must not be compiled with ARC (-fobjc-arc)\"\n"
+            + "#endif");
+  }
+
+  //  Verifies that the error test and message lines are generated for Reference Counting
+  //  when no Memory Management Option is set
+  public void testErrorTestAndMessageLinesGeneratedDefaultMemoryManagement() throws IOException {
+    String translation =
+        translateSourceFile(
+            "package foo.bar; public class A { public A(int i) {} A() {} }",
+            "foo.bar.A",
+            "foo/bar/A.m");
+
+    assertTranslation(
+        translation,
+        "#if __has_feature(objc_arc)\n"
+            + "#error \"foo/bar/A must not be compiled with ARC (-fobjc-arc)\"\n"
+            + "#endif");
   }
 }

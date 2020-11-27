@@ -284,7 +284,7 @@ public class RewriterTest extends GenerationTest {
         "class Test { int i; @Override public boolean equals(Object object) { "
         + "return (object == this) || (object instanceof Test) && (i == ((Test) object).i); } }",
         "Test", "Test.m");
-    assertTranslatedLines(translation, "(object == self) || "
+    assertTranslatedLines(translation, "(JreObjectEqualsEquals(object, self)) || "
         + "(([object isKindOfClass:[Test class]]) && (i_ == ((Test *) nil_chk(((Test *) "
         + "cast_chk(object, [Test class]))))->i_));");
   }
@@ -468,6 +468,51 @@ public class RewriterTest extends GenerationTest {
         "@catch (JavaIoIOException *e) {",
         " [((JavaIoPrintStream *) nil_chk(JreLoadStatic(JavaLangSystem, out))) printlnWithId:e];",
         " @throw e;",
+        "}");
+  }
+
+  public void testTryWithResourceOnEffectivelyFinalVariable() throws IOException {
+    if (!onJava9OrAbove()) {
+      return;
+    }
+    String translation = translateSourceFile(
+        "import java.io.*; "
+            + "public class Test { "
+            + "  String test(String path) throws IOException { "
+            + "    BufferedReader br = new BufferedReader(new FileReader(path)); "
+            + "    try (br) { "
+            + "      return br.readLine(); "
+            + "    } "
+            + "  } "
+            + "} ",
+        "Test", "Test.m");
+    assertTranslatedLines(translation,
+        "JavaIoBufferedReader *br = create_JavaIoBufferedReader_initWithJavaIoReader_("
+            + "create_JavaIoFileReader_initWithNSString_(path));",
+        "{",
+        "  JavaLangThrowable *__primaryException1 = nil;",
+        "  @try {",
+        "    return [br readLine];",
+        "  }",
+        "  @catch (JavaLangThrowable *e) {",
+        "    __primaryException1 = e;",
+        "    @throw e;",
+        "  }",
+        "  @finally {",
+        "    if (br != nil) {",
+        "      if (__primaryException1 != nil) {",
+        "        @try {",
+        "          [br close];",
+        "        }",
+        "        @catch (JavaLangThrowable *e) {",
+        "          [__primaryException1 addSuppressedWithJavaLangThrowable:e];",
+        "        }",
+        "      }",
+        "      else {",
+        "        [br close];",
+        "      }",
+        "    }",
+        "  }",
         "}");
   }
 }

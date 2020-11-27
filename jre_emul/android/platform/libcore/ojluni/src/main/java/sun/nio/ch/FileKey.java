@@ -33,8 +33,8 @@ import java.io.IOException;
  */
 public class FileKey {
 
-    long st_dev;    // ID of device
-    long st_ino;    // Inode number
+    /* J2ObjC removed. private */ long st_dev;    // ID of device
+    /* J2ObjC removed. private */ long st_ino;    // Inode number
 
     private FileKey() { }
 
@@ -67,4 +67,12 @@ public class FileKey {
     }
 
     private native void init(FileDescriptor fd) throws IOException;
+    // Android-removed: Code to load native libraries, doesn't make sense on Android.
+    /*
+    private static native void initIDs();
+
+    static {
+        initIDs();
+    }
+    */
 }

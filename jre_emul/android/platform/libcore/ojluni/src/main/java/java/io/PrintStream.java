@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2014 The Android Open Source Project
- * Copyright (c) 1996, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -71,6 +71,7 @@ public class PrintStream extends FilterOutputStream
     private BufferedWriter textOut;
     private OutputStreamWriter charOut;
 
+    // Android-added: Lazy initialization of charOut and textOut.
     private Charset charset;
 
     /**
@@ -105,11 +106,18 @@ public class PrintStream extends FilterOutputStream
     private PrintStream(boolean autoFlush, OutputStream out) {
         super(out);
         this.autoFlush = autoFlush;
+        // Android-changed: Lazy initialization of charOut and textOut.
+        // this.charOut = new OutputStreamWriter(this);
+        // this.textOut = new BufferedWriter(charOut);
     }
 
     private PrintStream(boolean autoFlush, OutputStream out, Charset charset) {
         super(out);
         this.autoFlush = autoFlush;
+        // Android-changed: Lazy initialization of charOut and textOut.
+        // this.charOut = new OutputStreamWriter(this, charset);
+        // this.textOut = new BufferedWriter(charOut);
+        this.charset = charset;
     }
 
     /* Variant of the private constructor so that the given charset name
@@ -303,7 +311,7 @@ public class PrintStream extends FilterOutputStream
      *          creating the file
      *
      * @throws  SecurityException
-     *          If a security manager is presentand {@link
+     *          If a security manager is present and {@link
      *          SecurityManager#checkWrite checkWrite(file.getPath())}
      *          denies write access to the file
      *
@@ -345,7 +353,7 @@ public class PrintStream extends FilterOutputStream
 
     private boolean closing = false; /* To avoid recursive closing */
 
-    // Android-changed: Lazily initialize textOut.
+    // BEGIN Android-added: Lazy initialization of charOut and textOut.
     private BufferedWriter getTextOut() {
         if (textOut == null) {
             PrintStream proxy = WeakProxy.forObject(this);
@@ -355,6 +363,7 @@ public class PrintStream extends FilterOutputStream
         }
         return textOut;
     }
+    // END Android-added: Lazy initialization of charOut and textOut.
 
     /**
      * Closes the stream.  This is done by flushing the stream and then closing
@@ -367,10 +376,12 @@ public class PrintStream extends FilterOutputStream
             if (! closing) {
                 closing = true;
                 try {
-                    // Android-changed: Lazily initialized.
+                    // BEGIN Android-changed: Lazy initialization of charOut and textOut.
+                    // textOut.close();
                     if (textOut != null) {
                         textOut.close();
                     }
+                    // END Android-changed: Lazy initialization of charOut and textOut.
                     out.close();
                 }
                 catch (IOException x) {
@@ -514,7 +525,7 @@ public class PrintStream extends FilterOutputStream
         try {
             synchronized (this) {
                 ensureOpen();
-                // Android-changed: Lazily initialized.
+                // Android-added: Lazy initialization of charOut and textOut.
                 BufferedWriter textOut = getTextOut();
                 textOut.write(buf);
                 textOut.flushBuffer();
@@ -538,7 +549,7 @@ public class PrintStream extends FilterOutputStream
         try {
             synchronized (this) {
                 ensureOpen();
-                // Android-changed: Lazily initialized.
+                // Android-added: Lazy initialization of charOut and textOut.
                 BufferedWriter textOut = getTextOut();
                 textOut.write(s);
                 textOut.flushBuffer();
@@ -559,7 +570,7 @@ public class PrintStream extends FilterOutputStream
         try {
             synchronized (this) {
                 ensureOpen();
-                // Android-changed: Lazily initialized.
+                // Android-added: Lazy initialization of charOut and textOut.
                 BufferedWriter textOut = getTextOut();
                 textOut.newLine();
                 textOut.flushBuffer();
@@ -871,7 +882,7 @@ public class PrintStream extends FilterOutputStream
      *         <tt>null</tt> argument depends on the <a
      *         href="../util/Formatter.html#syntax">conversion</a>.
      *
-     * @throws  IllegalFormatException
+     * @throws  java.util.IllegalFormatException
      *          If a format string contains an illegal syntax, a format
      *          specifier that is incompatible with the given arguments,
      *          insufficient arguments given the format string, or other
@@ -921,7 +932,7 @@ public class PrintStream extends FilterOutputStream
      *         <tt>null</tt> argument depends on the <a
      *         href="../util/Formatter.html#syntax">conversion</a>.
      *
-     * @throws  IllegalFormatException
+     * @throws  java.util.IllegalFormatException
      *          If a format string contains an illegal syntax, a format
      *          specifier that is incompatible with the given arguments,
      *          insufficient arguments given the format string, or other
@@ -964,7 +975,7 @@ public class PrintStream extends FilterOutputStream
      *         <tt>null</tt> argument depends on the <a
      *         href="../util/Formatter.html#syntax">conversion</a>.
      *
-     * @throws  IllegalFormatException
+     * @throws  java.util.IllegalFormatException
      *          If a format string contains an illegal syntax, a format
      *          specifier that is incompatible with the given arguments,
      *          insufficient arguments given the format string, or other
@@ -1021,7 +1032,7 @@ public class PrintStream extends FilterOutputStream
      *         <tt>null</tt> argument depends on the <a
      *         href="../util/Formatter.html#syntax">conversion</a>.
      *
-     * @throws  IllegalFormatException
+     * @throws  java.util.IllegalFormatException
      *          If a format string contains an illegal syntax, a format
      *          specifier that is incompatible with the given arguments,
      *          insufficient arguments given the format string, or other

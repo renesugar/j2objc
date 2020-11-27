@@ -96,19 +96,19 @@ IOSObjectArray *CreateFields(
   return fields;
 }
 
-void CGPInitDescriptor(
-    CGPDescriptor **pDescriptor, Class messageClass, Class builderClass, CGPMessageFlags flags,
-    size_t storageSize, jint fieldCount, CGPFieldData *fieldData, jint oneofCount,
-    CGPOneofData *oneofData) {
-  CGPDescriptor *descriptor = [[CGPDescriptor alloc]
+CGPDescriptor *CGPInitDescriptor(
+    Class messageClass, Class builderClass, CGPMessageFlags flags,
+    size_t storageSize) {
+  return [[CGPDescriptor alloc]
       initWithMessageClass:messageClass
               builderClass:builderClass
                      flags:flags
                storageSize:storageSize];
-  // The descriptor must be at least partially initialized and available before creating the field
-  // descriptors below.
-  *pDescriptor = descriptor;
+}
 
+void CGPInitFields(
+    CGPDescriptor *descriptor, jint fieldCount, CGPFieldData *fieldData,
+    jint oneofCount, CGPOneofData *oneofData) {
   descriptor->fields_ = CreateFields(fieldCount, fieldData, descriptor);
 
   if (oneofCount > 0) {
@@ -136,7 +136,7 @@ CGPDescriptor *NewMapEntryDescriptor(CGPFieldData *fieldData) {
 }
 
 CGPEnumDescriptor *CGPInitializeEnumType(
-    Class enumClass, jint valuesCount, JavaLangEnum<ComGoogleProtobufProtocolMessageEnum> **values,
+    Class enumClass, jint valuesCount, JavaLangEnum<ComGoogleProtobufProtocolMessageEnum> *values[],
     NSString **names, jint *intValues) {
   Ivar valueIvar = class_getInstanceVariable(enumClass, "value_");
   ptrdiff_t valueOffset = ivar_getOffset(valueIvar);
@@ -179,7 +179,7 @@ CGPEnumDescriptor *CGPInitializeEnumType(
 }
 
 void CGPInitializeOneofCaseEnum(
-    Class enumClass, jint valuesCount, JavaLangEnum<ComGoogleProtobufInternal_EnumLite> **values,
+    Class enumClass, jint valuesCount, JavaLangEnum<ComGoogleProtobufInternal_EnumLite> *values[],
     NSString **names, jint *intValues) {
   Ivar valueIvar = class_getInstanceVariable(enumClass, "value_");
   ptrdiff_t valueOffset = ivar_getOffset(valueIvar);
@@ -218,6 +218,14 @@ static inline ComGoogleProtobufDescriptors_FieldDescriptor_Type *GetTypeObj(CGPF
   return self;
 }
 
+- (NSString *)getName {
+  return [[messageClass_ java_getClass] getSimpleName];
+}
+
+- (NSString *)getFullName {
+  return [[messageClass_ java_getClass] getName];
+}
+
 - (id<JavaUtilList>)getFields {
   return [JavaUtilArrays asListWithNSObjectArray:fields_];
 }
@@ -248,13 +256,15 @@ int SerializationOrderComp(const void *a, const void *b) {
 }
 
 IOSObjectArray *CGPGetSerializationOrderFields(CGPDescriptor *descriptor) {
-  IOSObjectArray *result = descriptor->serializationOrderFields_;
-  if (!result) {
-    result = [descriptor->fields_ copyWithZone:nil];
-    qsort(result->buffer_, result->size_, sizeof(id), SerializationOrderComp);
-    descriptor->serializationOrderFields_ = result;
+  @synchronized(descriptor) {
+    IOSObjectArray *result = descriptor->serializationOrderFields_;
+    if (!result) {
+      result = [descriptor->fields_ copyWithZone:nil];
+      qsort(result->buffer_, result->size_, sizeof(id), SerializationOrderComp);
+      descriptor->serializationOrderFields_ = result;
+    }
+    return result;
   }
-  return result;
 }
 
 J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufDescriptors_Descriptor)
@@ -296,7 +306,8 @@ static void CGPFieldFixDefaultValue(CGPFieldDescriptor *descriptor) {
       break;
     case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_ENUM:
       {
-        Class enumClass = objc_getClass(data->className);
+        Class enumClass = data->objcType;
+        NSCAssert(enumClass != nil, @"Field data is missing objc enum type.");
         CGPEnumDescriptor *enumDescriptor = [enumClass performSelector:@selector(getDescriptor)];
         CGPEnumValueDescriptor *valueDescriptor =
             IOSObjectArray_Get(enumDescriptor->values_, data->defaultValue.valueInt);
@@ -326,8 +337,14 @@ static void CGPFieldFixDefaultValue(CGPFieldDescriptor *descriptor) {
           descriptor->valueType_ = NewMapEntryDescriptor(data->mapEntryFields);
           break;
         }
-        Class msgClass = objc_getClass(data->className);
-        CGPDescriptor *msgDescriptor = [msgClass performSelector:@selector(getDescriptor)];
+        CGPDescriptor *msgDescriptor =
+            data->descriptorRef ? (__bridge id)*(data->descriptorRef) : nil;
+        if (msgDescriptor == nil) {
+          // The descriptorRef wasn't specified, so use its accessor.
+          Class msgClass = data->objcType;
+          msgDescriptor = [msgClass performSelector:@selector(getDescriptor)];
+        }
+        NSCAssert(msgDescriptor != nil, @"Field data is missing descriptor reference.");
         data->defaultValue.valueId = msgDescriptor->defaultInstance_;
         descriptor->valueType_ = msgDescriptor;
         break;

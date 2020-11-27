@@ -48,6 +48,7 @@ import java.util.List;
 import java.util.Map;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
@@ -76,7 +77,7 @@ public final class TranslationUtil {
     this.options = options;
     this.elementUtil = elementUtil;
     this.jreEmulLoader = getJreEmulClassPath(options);
-    
+
   }
 
   public static TypeElement getSuperType(AbstractTypeDeclaration node) {
@@ -120,6 +121,9 @@ public final class TranslationUtil {
     if (ElementUtil.isLambda(type)) {
       return false;
     }
+    if (isJUnitTestClass(type) || ElementUtil.isRuntimeAnnotation(type)) {
+      return true;
+    }
     PackageElement packageElement = ElementUtil.getPackage(type);
     ReflectionSupport.Level level = null;
     while (type != null) {
@@ -143,6 +147,30 @@ public final class TranslationUtil {
     }
   }
 
+  private boolean isJUnitTestClass(TypeElement type) {
+    if (ElementUtil.isPackageInfo(type)) {
+      return false;
+    }
+    return isJUnit3TestClass(type) || isJUnit4TestClass(type);
+  }
+
+  public boolean isJUnit3TestClass(TypeElement type) {
+    TypeElement testType = typeUtil.resolveJavaType("junit.framework.Test");
+    return testType != null && typeUtil.isAssignable(type.asType(), testType.asType());
+  }
+
+  private boolean isJUnit4TestClass(TypeElement type) {
+    if (ElementUtil.hasQualifiedNamedAnnotation(type, "org.junit.runner.RunWith")) {
+      return true;
+    }
+    for (Element e : type.getEnclosedElements()) {
+      if (ElementUtil.hasQualifiedNamedAnnotation(e, "org.junit.Test")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private ReflectionSupport.Level getReflectionSupportLevelOnPackage(PackageElement node) {
     ReflectionSupport.Level level = getReflectionSupportLevel(
         ElementUtil.getAnnotation(node, ReflectionSupport.class));
@@ -151,7 +179,7 @@ public final class TranslationUtil {
     }
     // Check if package-info.java contains ReflectionSupport annotation
     level = options.getPackageInfoLookup().getReflectionSupportLevel(
-        node.getSimpleName().toString());
+        node.getQualifiedName().toString());
     return level;
   }
 
@@ -198,7 +226,8 @@ public final class TranslationUtil {
     TreeNode parent = node.getParent();
 
     while (parent instanceof ParenthesizedExpression) {
-        parent = parent.getParent();
+      node = (Expression) parent;
+      parent = node.getParent();
     }
 
     if (parent instanceof PostfixExpression) {

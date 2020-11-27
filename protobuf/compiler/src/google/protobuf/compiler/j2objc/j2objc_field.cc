@@ -43,106 +43,161 @@ namespace j2objc {
 
 namespace {
 
-  string GetParameterType(const FieldDescriptor *descriptor) {
-    switch (GetJavaType(descriptor)) {
-      case JAVATYPE_INT: return "Int";
-      case JAVATYPE_LONG: return "Long";
-      case JAVATYPE_FLOAT: return "Float";
-      case JAVATYPE_DOUBLE: return "Double";
-      case JAVATYPE_BOOLEAN: return "Boolean";
-      case JAVATYPE_STRING: return "NSString";
-      case JAVATYPE_BYTES: return "ComGoogleProtobufByteString";
-      case JAVATYPE_ENUM: return ClassName(descriptor->enum_type());
-      case JAVATYPE_MESSAGE: return ClassName(descriptor->message_type());
+std::string GetParameterType(const FieldDescriptor* descriptor) {
+  switch (GetJavaType(descriptor)) {
+    case JAVATYPE_INT:
+      return "Int";
+    case JAVATYPE_LONG:
+      return "Long";
+    case JAVATYPE_FLOAT:
+      return "Float";
+    case JAVATYPE_DOUBLE:
+      return "Double";
+    case JAVATYPE_BOOLEAN:
+      return "Boolean";
+    case JAVATYPE_STRING:
+      return "NSString";
+    case JAVATYPE_BYTES:
+      return "ComGoogleProtobufByteString";
+    case JAVATYPE_ENUM:
+      return ClassName(descriptor->enum_type());
+    case JAVATYPE_MESSAGE:
+      return ClassName(descriptor->message_type());
+  }
+}
+
+std::string GetStorageType(const FieldDescriptor* descriptor) {
+  switch (GetJavaType(descriptor)) {
+    case JAVATYPE_INT:
+      return "jint";
+    case JAVATYPE_LONG:
+      return "jlong";
+    case JAVATYPE_FLOAT:
+      return "jfloat";
+    case JAVATYPE_DOUBLE:
+      return "jdouble";
+    case JAVATYPE_BOOLEAN:
+      return "jboolean";
+    case JAVATYPE_STRING:
+      return "NSString *";
+    case JAVATYPE_BYTES:
+      return "ComGoogleProtobufByteString *";
+    case JAVATYPE_ENUM:
+      return ClassName(descriptor->enum_type()) + " *";
+    case JAVATYPE_MESSAGE:
+      return ClassName(descriptor->message_type()) + " *";
+  }
+}
+
+std::string GetDeclarationSpace(const FieldDescriptor* descriptor) {
+  switch (GetJavaType(descriptor)) {
+    case JAVATYPE_INT:
+    case JAVATYPE_LONG:
+    case JAVATYPE_FLOAT:
+    case JAVATYPE_DOUBLE:
+    case JAVATYPE_BOOLEAN:
+      return " ";
+    case JAVATYPE_STRING:
+    case JAVATYPE_BYTES:
+    case JAVATYPE_ENUM:
+    case JAVATYPE_MESSAGE:
+      return "";
+  }
+}
+
+std::string GetFieldName(const FieldDescriptor* descriptor) {
+  if (descriptor->type() == FieldDescriptor::TYPE_GROUP) {
+    return descriptor->message_type()->name();
+  } else {
+    return descriptor->name();
+  }
+}
+
+std::string GetListType(const FieldDescriptor* descriptor) {
+  if (GetJavaType(descriptor) == JAVATYPE_STRING) {
+    return "ComGoogleProtobufProtocolStringList";
+  }
+  return "JavaUtilList";
+}
+
+void SetCommonFieldVariables(const FieldDescriptor* descriptor,
+                             std::map<std::string, std::string>* variables) {
+  (*variables)["classname"] = ClassName(descriptor->containing_type());
+  (*variables)["camelcase_name"] = UnderscoresToCamelCase(descriptor);
+  (*variables)["capitalized_name"] =
+      UnderscoresToCapitalizedCamelCase(descriptor);
+  (*variables)["field_number"] = SimpleItoa(descriptor->number());
+  (*variables)["constant_name"] = FieldConstantName(descriptor);
+  (*variables)["parameter_type"] = GetParameterType(descriptor);
+  (*variables)["storage_type"] = GetStorageType(descriptor);
+  (*variables)["decl_space"] = GetDeclarationSpace(descriptor);
+  (*variables)["field_name"] = GetFieldName(descriptor);
+  (*variables)["flags"] = GetFieldFlags(descriptor);
+  (*variables)["field_type"] = GetFieldTypeEnumValue(descriptor);
+  (*variables)["default_value_type"] = GetDefaultValueTypeName(descriptor);
+  (*variables)["default_value"] = DefaultValue(descriptor);
+  (*variables)["has_bit_index"] = "0";
+  (*variables)["options_data"] = GetFieldOptionsData(descriptor);
+  (*variables)["list_type"] = GetListType(descriptor);
+}
+
+void CollectForwardDeclarationsForFieldType(std::set<std::string>* declarations,
+                                            const FieldDescriptor* descriptor,
+                                            bool includeBuilder) {
+  JavaType type = GetJavaType(descriptor);
+  if (type == JAVATYPE_BYTES) {
+    declarations->insert("@class ComGoogleProtobufByteString");
+  } else if (type == JAVATYPE_ENUM) {
+    declarations->insert("@class " + ClassName(descriptor->enum_type()));
+    declarations->insert("J2OBJC_CLASS_DECLARATION(" +
+                         ClassName(descriptor->enum_type()) + ")");
+    declarations->insert(
+        "FOUNDATION_EXPORT ComGoogleProtobufDescriptors_EnumDescriptor *" +
+        ClassName(descriptor->enum_type()) + "_descriptor_");
+  } else if (type == JAVATYPE_MESSAGE) {
+    std::string classname = ClassName(descriptor->message_type());
+    declarations->insert("@class " + classname);
+    declarations->insert("J2OBJC_CLASS_DECLARATION(" + classname + ")");
+    if (includeBuilder) {
+      declarations->insert("@class " + classname + "_Builder");
+      declarations->insert("J2OBJC_CLASS_DECLARATION(" + classname +
+                           "_Builder)");
     }
   }
-
-  string GetStorageType(const FieldDescriptor *descriptor) {
-    switch (GetJavaType(descriptor)) {
-      case JAVATYPE_INT: return "jint";
-      case JAVATYPE_LONG: return "jlong";
-      case JAVATYPE_FLOAT: return "jfloat";
-      case JAVATYPE_DOUBLE: return "jdouble";
-      case JAVATYPE_BOOLEAN: return "jboolean";
-      case JAVATYPE_STRING: return "NSString *";
-      case JAVATYPE_BYTES: return "ComGoogleProtobufByteString *";
-      case JAVATYPE_ENUM:
-        return ClassName(descriptor->enum_type()) + " *";
-      case JAVATYPE_MESSAGE:
-        return ClassName(descriptor->message_type()) + " *";
-    }
-  }
-
-  string GetDeclarationSpace(const FieldDescriptor *descriptor) {
-    switch (GetJavaType(descriptor)) {
-      case JAVATYPE_INT:
-      case JAVATYPE_LONG:
-      case JAVATYPE_FLOAT:
-      case JAVATYPE_DOUBLE:
-      case JAVATYPE_BOOLEAN:
-        return " ";
-      case JAVATYPE_STRING:
-      case JAVATYPE_BYTES:
-      case JAVATYPE_ENUM:
-      case JAVATYPE_MESSAGE:
-        return "";
-    }
-  }
-
-  string GetFieldName(const FieldDescriptor *descriptor) {
-    if (descriptor->type() == FieldDescriptor::TYPE_GROUP) {
-      return descriptor->message_type()->name();
-    } else {
-      return descriptor->name();
-    }
-  }
-
-  string GetListType(const FieldDescriptor *descriptor) {
-    if (GetJavaType(descriptor) == JAVATYPE_STRING) {
-      return "ComGoogleProtobufProtocolStringList";
-    }
-    return "JavaUtilList";
-  }
-
-  void SetCommonFieldVariables(const FieldDescriptor* descriptor,
-      std::map<string, string>* variables) {
-    (*variables)["classname"] = ClassName(descriptor->containing_type());
-    (*variables)["camelcase_name"] = UnderscoresToCamelCase(descriptor);
-    (*variables)["capitalized_name"] =
-        UnderscoresToCapitalizedCamelCase(descriptor);
-    (*variables)["field_number"] = SimpleItoa(descriptor->number());
-    (*variables)["constant_name"] = FieldConstantName(descriptor);
-    (*variables)["parameter_type"] = GetParameterType(descriptor);
-    (*variables)["storage_type"] = GetStorageType(descriptor);
-    (*variables)["decl_space"] = GetDeclarationSpace(descriptor);
-    (*variables)["field_name"] = GetFieldName(descriptor);
-    (*variables)["flags"] = GetFieldFlags(descriptor);
-    (*variables)["field_type"] = GetFieldTypeEnumValue(descriptor);
-    (*variables)["field_data_class_name"] = GetFieldDataClassName(descriptor);
-    (*variables)["default_value_type"] = GetDefaultValueTypeName(descriptor);
-    (*variables)["default_value"] = DefaultValue(descriptor);
-    (*variables)["has_bit_index"] = "0";
-    (*variables)["options_data"] = GetFieldOptionsData(descriptor);
-    (*variables)["list_type"] = GetListType(descriptor);
-  }
-
-  void CollectForwardDeclarationsForFieldType(
-      std::set<string>* declarations, const FieldDescriptor *descriptor,
-      bool includeBuilder) {
-    JavaType type = GetJavaType(descriptor);
-    if (type == JAVATYPE_BYTES) {
-      declarations->insert("@class ComGoogleProtobufByteString");
-    } else if (type == JAVATYPE_ENUM) {
-      declarations->insert("@class " + ClassName(descriptor->enum_type()));
-    } else if (type == JAVATYPE_MESSAGE) {
-      string classname = ClassName(descriptor->message_type());
-      declarations->insert("@class " + classname);
-      if (includeBuilder) {
-        declarations->insert("@class " + classname + "_Builder");
-      }
-    }
-  }
+}
 }  // namespace
+
+void CollectSourceImportsForField(std::set<std::string>* imports,
+                                  const FieldDescriptor* descriptor) {
+  // Enums and messages have their Class referenced in the field metadata.
+  switch (GetJavaType(descriptor)) {
+    case JAVATYPE_ENUM:
+      imports->insert(GetHeader(descriptor->enum_type()));
+      break;
+    case JAVATYPE_MESSAGE:
+      imports->insert(GetHeader(descriptor->message_type()));
+      break;
+    default:
+      // add nothing.
+      break;
+  }
+}
+
+void GenerateObjcClassRef(
+    io::Printer *printer, const FieldDescriptor *descriptor) {
+  JavaType type = GetJavaType(descriptor);
+  std::string classref;
+  if (type == JAVATYPE_ENUM) {
+    classref =
+        "J2OBJC_CLASS_REFERENCE(" + ClassName(descriptor->enum_type()) + ")";
+  } else if (type == JAVATYPE_MESSAGE) {
+    classref =
+        "J2OBJC_CLASS_REFERENCE(" + ClassName(descriptor->message_type()) + ")";
+  } else {
+    classref = "NULL";
+  }
+  printer->Print("  .objcType = $classref$,\n", "classref", classref);
+}
 
 FieldGenerator::FieldGenerator(const FieldDescriptor *descriptor)
     : descriptor_(descriptor) {
@@ -152,21 +207,24 @@ FieldGenerator::FieldGenerator(const FieldDescriptor *descriptor)
 FieldGenerator::~FieldGenerator() {
 }
 
-void FieldGenerator::CollectForwardDeclarations(std::set<string>* declarations)
-    const {
+void FieldGenerator::CollectForwardDeclarations(
+    std::set<std::string>* declarations) const {
   CollectForwardDeclarationsForFieldType(declarations, descriptor_, true);
 }
 
 void FieldGenerator::CollectMessageOrBuilderForwardDeclarations(
-    std::set<string>* declarations) const {
+    std::set<std::string>* declarations) const {
   CollectForwardDeclarationsForFieldType(declarations, descriptor_, false);
 }
 
-void FieldGenerator::CollectSourceImports(std::set<string>* imports) const {
+void FieldGenerator::CollectSourceImports(
+    std::set<std::string>* imports) const {
+  // Imports needed for generated metadata of enum and message fields.
+  CollectSourceImportsForField(imports, descriptor_);
 }
 
 void FieldGenerator::CollectMessageOrBuilderImports(
-    std::set<string>* imports) const {}
+    std::set<std::string>* imports) const {}
 
 void FieldGenerator::GenerateFieldHeader(io::Printer *printer) const {
   printer->Print(variables_,
@@ -190,6 +248,7 @@ void FieldGenerator::GenerateFieldData(io::Printer *printer) const {
   );
   GenerateFieldDataOffset(printer);
   GenerateClassNameOrMapData(printer);
+  GenerateStaticRefs(printer);
   printer->Print(variables_,
       "  .containingType = NULL,\n"  // Used by extensions.
       "  .optionsData = $options_data$,\n"
@@ -202,7 +261,22 @@ void FieldGenerator::GenerateFieldDataOffset(io::Printer *printer) const {
 }
 
 void FieldGenerator::GenerateClassNameOrMapData(io::Printer *printer) const {
-  printer->Print(variables_, "  .className = $field_data_class_name$,\n");
+  GenerateObjcClassRef(printer, descriptor_);
+}
+
+void FieldGenerator::GenerateStaticRefs(io::Printer *printer) const {
+  JavaType type = GetJavaType(descriptor_);
+  std::string staticref;
+  if (type == JAVATYPE_MESSAGE) {
+    staticref = "&" +
+        GetParameterType(descriptor_) + "_descriptor_";
+  } else if (type == JAVATYPE_ENUM) {
+    staticref = "&" +
+        GetParameterType(descriptor_) + "_descriptor_";
+  } else {
+    staticref = "NULL";
+  }
+  printer->Print("  .descriptorRef = $staticref$,\n", "staticref", staticref);
 }
 
 SingleFieldGenerator::SingleFieldGenerator(
@@ -210,14 +284,6 @@ SingleFieldGenerator::SingleFieldGenerator(
   : FieldGenerator(descriptor) {
   if (descriptor->containing_oneof() == NULL) {
     variables_["has_bit_index"] = SimpleItoa((*numHasBits)++);
-  }
-}
-
-void SingleFieldGenerator::CollectSourceImports(
-    std::set<string>* imports) const {
-  FieldGenerator::CollectSourceImports(imports);
-  if (GetJavaType(descriptor_) == JAVATYPE_ENUM) {
-    imports->insert(GetHeader(descriptor_->enum_type()));
   }
 }
 
@@ -248,19 +314,19 @@ void SingleFieldGenerator::GenerateDeclaration(io::Printer* printer) const {
 }
 
 void RepeatedFieldGenerator::CollectForwardDeclarations(
-    std::set<string>* declarations) const {
+    std::set<std::string>* declarations) const {
   FieldGenerator::CollectForwardDeclarations(declarations);
   declarations->insert("@protocol JavaLangIterable");
 }
 
 void RepeatedFieldGenerator::CollectMessageOrBuilderForwardDeclarations(
-    std::set<string>* declarations) const {
+    std::set<std::string>* declarations) const {
   FieldGenerator::CollectMessageOrBuilderForwardDeclarations(declarations);
   declarations->insert("@protocol " + GetListType(descriptor_));
 }
 
 void RepeatedFieldGenerator::CollectMessageOrBuilderImports(
-    std::set<string>* imports) const {
+    std::set<std::string>* imports) const {
   if (GetJavaType(descriptor_) == JAVATYPE_STRING) {
     // When translated against an older Java protobuf runtime, the caller
     // will need the full type info for ProtocolStringList.
@@ -283,7 +349,9 @@ void RepeatedFieldGenerator::GenerateFieldBuilderHeader(io::Printer* printer)
     printer->Print(variables_,
         "- ($classname$_Builder*)\n"
         "    add$capitalized_name$With$parameter_type$_Builder:\n"
-        "    ($parameter_type$_Builder *)value;\n");
+        "    ($parameter_type$_Builder *)value;\n"
+        "- ($classname$_Builder *)remove$capitalized_name$WithInt:(int)index;\n"
+    );
   }
 }
 
@@ -301,8 +369,9 @@ void RepeatedFieldGenerator::GenerateDeclaration(io::Printer* printer) const {
 }
 
 MapFieldGenerator::MapFieldGenerator(
-    const FieldDescriptor *descriptor, uint32_t entry_fields_idx)
-    : FieldGenerator(descriptor) {
+    const FieldDescriptor *descriptor, uint32_t map_fields_idx)
+    : FieldGenerator(descriptor),
+    entry_fields_idx_(map_fields_idx * 2) {
   GOOGLE_CHECK_EQ(FieldDescriptor::TYPE_MESSAGE, descriptor->type());
   const Descriptor* entry_message = descriptor->message_type();
   GOOGLE_CHECK(entry_message->options().map_entry());
@@ -315,22 +384,24 @@ MapFieldGenerator::MapFieldGenerator(
   variables_["value_storage_type"] = GetStorageType(value_field_);
   variables_["value_parameter_type"] = GetParameterType(value_field_);
   variables_["value_descriptor_type"] = GetFieldTypeEnumValue(value_field_);
-  variables_["value_class_name"] = GetFieldDataClassName(value_field_);
-  variables_["map_entry_fields_idx"] = SimpleItoa(entry_fields_idx * 2);
+  variables_["map_entry_fields_idx"] = SimpleItoa(entry_fields_idx_);
 }
 
 void MapFieldGenerator::CollectForwardDeclarations(
-    std::set<string>* declarations) const {
-}
+    std::set<std::string>* declarations) const {}
 
 void MapFieldGenerator::CollectMessageOrBuilderForwardDeclarations(
-    std::set<string>* declarations) const {
+    std::set<std::string>* declarations) const {
   CollectForwardDeclarationsForFieldType(declarations, value_field_, false);
   declarations->insert("@protocol JavaUtilMap");
 }
 
-void MapFieldGenerator::CollectSourceImports(std::set<string>* imports) const {
+void MapFieldGenerator::CollectSourceImports(
+    std::set<std::string>* imports) const {
+  // Don't call super. Map fields are a special case.
   imports->insert("com/google/protobuf/MapField.h");
+  CollectSourceImportsForField(imports, key_field_);
+  CollectSourceImportsForField(imports, value_field_);
 }
 
 void MapFieldGenerator::GenerateFieldBuilderHeader(io::Printer* printer) const {
@@ -378,6 +449,10 @@ void MapEntryFieldGenerator::GenerateFieldDataOffset(io::Printer *printer)
   printer->Print(variables_, "  .offset = 0,\n");
 }
 
+void MapFieldGenerator::GenerateStaticRefs(io::Printer *printer) const {
+  printer->Print(variables_, "  .descriptorRef = NULL,\n");
+}
+
 void MapEntryFieldGenerator::GenerateFieldBuilderHeader(io::Printer* printer)
     const {
 }
@@ -387,6 +462,10 @@ void MapEntryFieldGenerator::GenerateMessageOrBuilderProtocol(
 }
 
 void MapEntryFieldGenerator::GenerateDeclaration(io::Printer* printer) const {
+}
+
+void MapEntryFieldGenerator::GenerateStaticRefs(io::Printer *printer) const {
+  printer->Print(variables_, "  .descriptorRef = NULL,\n");
 }
 
 FieldGeneratorMap::FieldGeneratorMap(const Descriptor* descriptor)

@@ -58,6 +58,10 @@ typedef ComGoogleProtobufDescriptors_OneofDescriptor CGPOneofDescriptor;
 
 @interface ComGoogleProtobufDescriptors_Descriptor : NSObject
 
+- (NSString *)getName;
+
+- (NSString *)getFullName;
+
 - (id<JavaUtilList>)getFields;
 
 - (id<JavaUtilList>)getOneofs;

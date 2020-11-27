@@ -16,11 +16,15 @@
 
 package com.google.devtools.j2objc.gen;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+
 import com.google.common.collect.Sets;
 import com.google.devtools.j2objc.J2ObjC;
+import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.types.Import;
 import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.UnicodeUtils;
+import java.util.Base64;
 import java.util.Set;
 
 /**
@@ -29,6 +33,8 @@ import java.util.Set;
  * @author Tom Ball
  */
 public class ObjectiveCHeaderGenerator extends ObjectiveCSourceFileGenerator {
+
+  private final Options options;
 
   // The prefix to use for preprocessor variable names. Derived from the path of
   // the generated file. For example if "my/pkg/Foo.h" is being generated the
@@ -45,29 +51,40 @@ public class ObjectiveCHeaderGenerator extends ObjectiveCSourceFileGenerator {
   protected ObjectiveCHeaderGenerator(GenerationUnit unit) {
     super(unit, false);
     varPrefix = getVarPrefix(unit.getOutputPath());
+    options = unit.options();
   }
 
   @Override
   protected String getSuffix() {
-    return ".h";
+    return options.getLanguage().headerSuffix();
   }
 
-  public void generate() {
-    println(J2ObjC.getFileHeader(getGenerationUnit().getSourceName()));
+  public final void generate() {
+    println(J2ObjC.getFileHeader(options, getGenerationUnit().getSourceName()));
     for (String javadoc : getGenerationUnit().getJavadocBlocks()) {
       print(javadoc);
     }
     generateFileHeader();
+
+    if (getGenerationUnit().options().emitKytheMappings()) {
+      generateKythePragma();
+    }
 
     for (GeneratedType generatedType : getOrderedTypes()) {
       printTypeDeclaration(generatedType);
     }
 
     generateFileFooter();
-    save(getOutputPath());
+
+    if (getGenerationUnit().options().emitKytheMappings()) {
+      generateTypeMappings();
+    }
+
+    save(getOutputPath(), options.fileUtil().getHeaderOutputDirectory());
   }
 
   protected void printTypeDeclaration(GeneratedType generatedType) {
+    generatedType.getGeneratedSourceMappings().setTargetOffset(getBuilder().length());
     print(generatedType.getPublicDeclarationCode());
   }
 
@@ -75,7 +92,7 @@ public class ObjectiveCHeaderGenerator extends ObjectiveCSourceFileGenerator {
     printf("#ifndef %s_H\n", varPrefix);
     printf("#define %s_H\n", varPrefix);
     pushIgnoreDeprecatedDeclarationsPragma();
-    pushIgnoreNullabilityCompletenessPragma();
+    pushIgnoreNullabilityPragmas();
 
     Set<String> seenTypes = Sets.newHashSet();
     Set<String> includeFiles = Sets.newTreeSet();
@@ -117,7 +134,7 @@ public class ObjectiveCHeaderGenerator extends ObjectiveCSourceFileGenerator {
 
   protected void generateFileFooter() {
     newline();
-    popIgnoreNullabilityCompletenessPragma();
+    popIgnoreNullabilityPragmas();
     popIgnoreDeprecatedDeclarationsPragma();
     printf("#endif // %s_H\n", varPrefix);
   }
@@ -130,26 +147,81 @@ public class ObjectiveCHeaderGenerator extends ObjectiveCSourceFileGenerator {
   }
 
   /**
-   * Ignores nullability completeness warnings. If clang finds any nullability
-   * annotations, it checks that all annotatable sites have annotations. Java
-   * checker frameworks don't have that requirement.
+   * Ignores nullability warnings. This method should be paired with popIgnoreNullabilityPragmas.
+   *
+   * <p>-Wnullability: In Java, conflicting nullability annotations do not cause compilation issues
+   * (e.g.changing a parameter from {@code @Nullable} to {@code @NonNull} in an overriding method).
+   * In Objective-C, they generate compiler warnings. The transpiled code should be able to compile
+   * in spite of conflicting/incomplete Java nullability annotations.
+   *
+   * <p>-Wnullability-completeness: if clang finds any nullability annotations, it checks that all
+   * annotable sites have annotations. Java checker frameworks don't have that requirement.
    */
-  protected void pushIgnoreNullabilityCompletenessPragma() {
-    if (getGenerationUnit().hasNullabilityAnnotations()) {
+  protected void pushIgnoreNullabilityPragmas() {
+    if (getGenerationUnit().options().nullability()
+        || getGenerationUnit().hasNullabilityAnnotations()) {
       newline();
       println("#if __has_feature(nullability)");
       println("#pragma clang diagnostic push");
+      println("#pragma GCC diagnostic ignored \"-Wnullability\"");
       println("#pragma GCC diagnostic ignored \"-Wnullability-completeness\"");
       println("#endif");
     }
   }
 
-  protected void popIgnoreNullabilityCompletenessPragma() {
-    if (getGenerationUnit().hasNullabilityAnnotations()) {
+  /** Restores warnings after a call to pushIgnoreNullabilityPragmas. */
+  protected void popIgnoreNullabilityPragmas() {
+    if (getGenerationUnit().options().nullability()
+        || getGenerationUnit().hasNullabilityAnnotations()) {
       newline();
       println("#if __has_feature(nullability)");
       println("#pragma clang diagnostic pop");
       println("#endif");
     }
+  }
+
+  private void generateKythePragma() {
+    println("#ifdef KYTHE_IS_RUNNING");
+    println("#pragma kythe_inline_metadata \"This file contains Kythe metadata.\"");
+    println("#endif");
+  }
+
+  private void generateTypeMappings() {
+    KytheIndexingMetadata metadata = new KytheIndexingMetadata();
+
+    for (GeneratedType generatedType : getOrderedTypes()) {
+      GeneratedSourceMappings sourceMappings = generatedType.getGeneratedSourceMappings();
+      int offset = sourceMappings.getTargetOffset();
+      for (GeneratedSourceMappings.Mapping mapping : sourceMappings.getMappings()) {
+        metadata.addAnchorAnchor(
+            mapping.getSourceBegin(),
+            mapping.getSourceEnd(),
+            mapping.getTargetBegin() + offset,
+            mapping.getTargetEnd() + offset,
+            "" /* sourceCorpus */,
+            getGenerationUnit().getSourceName() /* sourcePath */);
+      }
+    }
+
+    printKytheMappings(metadata);
+  }
+
+  private void printKytheMappings(KytheIndexingMetadata metadata) {
+    // The Kythe indexer assumes the JSON metadata is base-64 encoded; we wrap it to 80 characters
+    // for readability in the generated source.
+    String encodedMetadata =
+        new String(Base64.getEncoder().encode(metadata.toJson().getBytes(UTF_8)), UTF_8);
+    StringBuilder wrappedMetadata = new StringBuilder();
+    int lineWidth = 80;
+    for (int i = 0; i <= encodedMetadata.length() / lineWidth; ++i) {
+      wrappedMetadata.append(
+          encodedMetadata, i * lineWidth, Math.min((i + 1) * lineWidth, encodedMetadata.length()));
+      wrappedMetadata.append("\n");
+    }
+
+    newline();
+    println("/* This file contains Kythe metadata.");
+    print(wrappedMetadata.toString());
+    println("*/");
   }
 }

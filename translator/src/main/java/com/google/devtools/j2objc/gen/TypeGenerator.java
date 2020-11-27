@@ -54,6 +54,7 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
 
   // Convenient fields for use by subclasses.
   protected final AbstractTypeDeclaration typeNode;
+  protected final ElementUtil elementUtil;
   protected final TypeElement typeElement;
   protected final CompilationUnit compilationUnit;
   protected final TranslationEnvironment env;
@@ -71,6 +72,7 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
     typeElement = node.getTypeElement();
     compilationUnit = TreeUtil.getCompilationUnit(node);
     env = compilationUnit.getEnv();
+    elementUtil = env.elementUtil();
     typeUtil = env.typeUtil();
     nameTable = env.nameTable();
     typeName = nameTable.getFullName(typeElement);
@@ -246,7 +248,7 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
     }
     return hasInitializeMethod()
         || hasStaticAccessorMethods()
-        || ElementUtil.isRuntimeAnnotation(typeElement)
+        || ElementUtil.isGeneratedAnnotation(typeElement)
         || hasStaticMethods();
   }
 
@@ -273,9 +275,7 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
     }
   }
 
-  /**
-   * Create an Objective-C method signature string.
-   */
+  /** Create an Objective-C method signature string. */
   protected String getMethodSignature(MethodDeclaration m) {
     StringBuilder sb = new StringBuilder();
     ExecutableElement element = m.getExecutableElement();
@@ -306,29 +306,18 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
         }
         VariableElement var = params.get(i).getVariableElement();
         String typeName = nameTable.getObjCType(var.asType());
-        sb.append(UnicodeUtils.format("%s:(%s%s)%s", selParts[i], typeName, nullability(var),
-            nameTable.getVariableShortName(var)));
+        sb.append(
+            UnicodeUtils.format(
+                "%s:(%s%s)%s",
+                selParts[i], typeName, nullability(var), nameTable.getVariableShortName(var)));
       }
     }
 
     return sb.toString();
   }
 
-  /**
-   * Returns an Objective-C nullability attribute string if there is a matching
-   * JSR305 annotation, or an empty string.
-   */
-  private String nullability(Element element) {
-    if (options.nullability()) {
-      if (ElementUtil.hasNullableAnnotation(element)) {
-        return " __nullable";
-      }
-      if (ElementUtil.isNonnull(element, parametersNonnullByDefault)) {
-        return " __nonnull";
-      }
-    }
-    return "";
-  }
+  /** Returns an Objective-C nullability attribute string if needed. */
+  protected abstract String nullability(Element element);
 
   protected String getFunctionSignature(FunctionDeclaration function, boolean isPrototype) {
     StringBuilder sb = new StringBuilder();

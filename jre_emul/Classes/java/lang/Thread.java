@@ -23,6 +23,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import sun.nio.ch.Interruptible;
 
 /*-[
@@ -194,7 +196,7 @@ public class Thread implements Runnable {
   }
 
   private static native Object newNativeThread() /*-[
-    return [[[NativeThread alloc] init] autorelease];
+    return AUTORELEASE([[NativeThread alloc] init]);
   ]-*/;
 
   /**
@@ -361,6 +363,7 @@ public class Thread implements Runnable {
   void *start_routine(void *arg) {
     JavaLangThread *thread = (JavaLangThread *)arg;
     pthread_setspecific(java_thread_key, thread);
+    pthread_setname_np([thread->name_ UTF8String]);
     @autoreleasepool {
       @try {
         [thread run];
@@ -385,10 +388,10 @@ public class Thread implements Runnable {
    */
   private static native void initializeThreadClass() /*-[
     initJavaThreadKeyOnce();
-    NativeThread *nt = [[[NativeThread alloc] init] autorelease];
+    NativeThread *nt = AUTORELEASE([[NativeThread alloc] init]);
     nt->t = pthread_self();
     JavaLangThread *mainThread = JavaLangThread_createMainThreadWithId_(nt);
-    pthread_setspecific(java_thread_key, [mainThread retain]);
+    pthread_setspecific(java_thread_key, RETAIN_(mainThread));
   ]-*/;
 
   private static Thread createCurrentThread(Object nativeThread) {
@@ -400,10 +403,10 @@ public class Thread implements Runnable {
     if (thread) {
       return thread;
     }
-    NativeThread *nt = [[[NativeThread alloc] init] autorelease];
+    NativeThread *nt = AUTORELEASE([[NativeThread alloc] init]);
     nt->t = pthread_self();
     thread = JavaLangThread_createCurrentThreadWithId_(nt);
-    pthread_setspecific(java_thread_key, [thread retain]);
+    pthread_setspecific(java_thread_key, RETAIN_(thread));
     return thread;
   ]-*/;
 
@@ -412,11 +415,11 @@ public class Thread implements Runnable {
       throw new IllegalThreadStateException("This thread was already started!");
     }
     threadGroup.add(this);
+    state = STATE_RUNNABLE;
     start0();
     if (priority != NORM_PRIORITY) {
       nativeSetPriority(priority);
     }
-    state = STATE_RUNNABLE;
   }
 
   private native void start0() /*-[
@@ -427,7 +430,8 @@ public class Thread implements Runnable {
     if (stack >= PTHREAD_STACK_MIN) {
       pthread_attr_setstacksize(&attr, stack);
     }
-    pthread_create(&nt->t, &attr, &start_routine, [self retain]);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_create(&nt->t, &attr, &start_routine, RETAIN_(self));
   ]-*/;
 
   void exit() {
@@ -665,12 +669,14 @@ public class Thread implements Runnable {
    * @see Thread#interrupt
    * @see Thread#isInterrupted
    */
-  public static boolean interrupted() {
-    Thread currentThread = currentThread();
-    boolean result = currentThread.interrupted;
-    currentThread.interrupted = false;
-    return result;
-  }
+  public static native boolean interrupted() /*-[
+    JavaLangThread *currentThread = JavaLangThread_currentThread();
+    @synchronized(currentThread->nativeThread_) {
+      jboolean result = currentThread->interrupted_;
+      currentThread->interrupted_ = false;
+      return result;
+    }
+  ]-*/;
 
   /**
    * Returns a <code>boolean</code> indicating whether the receiver has a
@@ -699,9 +705,10 @@ public class Thread implements Runnable {
           return;
       }
 
-      synchronized (nativeThread) {
+      Object lock = currentThread().nativeThread;
+      synchronized (lock) {
           while (isAlive()) {
-              nativeThread.wait(POLL_INTERVAL);
+              lock.wait(POLL_INTERVAL);
           }
       }
   }
@@ -750,7 +757,8 @@ public class Thread implements Runnable {
           return;
       }
 
-      synchronized (nativeThread) {
+      Object lock = currentThread().nativeThread;
+      synchronized (lock) {
           if (!isAlive()) {
               return;
           }
@@ -762,9 +770,9 @@ public class Thread implements Runnable {
           long start = System.nanoTime();
           while (true) {
               if (millis > POLL_INTERVAL) {
-                nativeThread.wait(POLL_INTERVAL);
+                lock.wait(POLL_INTERVAL);
               } else {
-                nativeThread.wait(millis, nanos);
+                lock.wait(millis, nanos);
               }
               if (!isAlive()) {
                   break;
@@ -1070,8 +1078,9 @@ public class Thread implements Runnable {
   private static class SystemUncaughtExceptionHandler implements UncaughtExceptionHandler {
     @Override
     public synchronized void uncaughtException(Thread t, Throwable e) {
-      System.err.print("Exception in thread \"" + t.getName() + "\" ");
-      e.printStackTrace(System.err);
+      // Log the exception using the root logger (""), so it isn't accidentally filtered.
+      Logger.getLogger("").log(
+          Level.SEVERE, "Uncaught exception in thread \"" + t.getName() + "\"", e);
     }
   }
 
@@ -1117,7 +1126,7 @@ public class Thread implements Runnable {
   /**
    * Returns a map of stack traces for all live threads.
    */
-  // TODO(user): Can we update this to return something useful?
+  // TODO(dweis): Can we update this to return something useful?
   public static Map<Thread,StackTraceElement[]> getAllStackTraces() {
     return Collections.<Thread, StackTraceElement[]>emptyMap();
   }

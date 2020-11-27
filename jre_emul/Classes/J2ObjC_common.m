@@ -22,8 +22,10 @@
 #import "IOSClass.h"
 #import "JreRetainedWith.h"
 #import "java/lang/AbstractStringBuilder.h"
+#import "java/lang/ArithmeticException.h"
 #import "java/lang/AssertionError.h"
 #import "java/lang/ClassCastException.h"
+#import "java/lang/Iterable.h"
 #import "java/lang/NullPointerException.h"
 #import "java/lang/Throwable.h"
 #import "java/util/logging/Level.h"
@@ -31,23 +33,27 @@
 #import "objc/runtime.h"
 
 id JreThrowNullPointerException() {
-  @throw create_JavaLangNullPointerException_init();
+  @throw create_JavaLangNullPointerException_init(); // NOLINT
 }
 
 void JreThrowClassCastException(id obj, Class cls) {
-  @throw create_JavaLangClassCastException_initWithNSString_(
+  @throw create_JavaLangClassCastException_initWithNSString_(  // NOLINT
       [NSString stringWithFormat:@"Cannot cast object of type %@ to %@",
           [[obj java_getClass] getName], NSStringFromClass(cls)]);
 }
 
 void JreThrowClassCastExceptionWithIOSClass(id obj, IOSClass *cls) {
-  @throw create_JavaLangClassCastException_initWithNSString_(
+  @throw create_JavaLangClassCastException_initWithNSString_(  // NOLINT
       [NSString stringWithFormat:@"Cannot cast object of type %@ to %@",
           [[obj java_getClass] getName], [cls getName]]);
 }
 
+void JreThrowArithmeticExceptionWithNSString(NSString *msg) {
+  @throw create_JavaLangArithmeticException_initWithNSString_(msg);  // NOLINT
+}
+
 void JreThrowAssertionError(id __unsafe_unretained msg) {
-  @throw AUTORELEASE([[JavaLangAssertionError alloc] initWithId:[msg description]]);
+  @throw AUTORELEASE([[JavaLangAssertionError alloc] initWithId:[msg description]]);  // NOLINT
 }
 
 void JreFinalize(id self) {
@@ -73,6 +79,7 @@ id JreStrongAssignAndConsume(__strong id *pIvar, NS_RELEASES_ARGUMENT id value) 
 // locks for atomic access is consistent with how Apple implements atomic
 // property accessors, and the hashing used here is inspired by Apple's
 // implementation:
+// NOLINTNEXTLINE
 // http://www.opensource.apple.com/source/objc4/objc4-532.2/runtime/Accessors.subproj/objc-accessors.mm
 // Spin locks are unsafe to use on iOS because of the potential for priority
 // inversion so we use pthread_mutex.
@@ -93,7 +100,7 @@ id JreLoadVolatileId(volatile_id *pVar) {
   VOLATILE_LOCK(lock);
   id value = [*(id *)pVar retain];
   VOLATILE_UNLOCK(lock);
-  return [value autorelease];
+  return AUTORELEASE(value);
 }
 
 id JreAssignVolatileId(volatile_id *pVar, id value) {
@@ -111,7 +118,7 @@ id JreVolatileStrongAssign(volatile_id *pIvar, id value) {
   id oldValue = *(id *)pIvar;
   *(id *)pIvar = value;
   VOLATILE_UNLOCK(lock);
-  [oldValue autorelease];
+  AUTORELEASE(oldValue);
   return value;
 }
 
@@ -124,7 +131,7 @@ jboolean JreCompareAndSwapVolatileStrongId(volatile_id *pVar, id expected, id ne
   }
   VOLATILE_UNLOCK(lock);
   if (result) {
-    [expected autorelease];
+    AUTORELEASE(expected);
   }
   return result;
 }
@@ -136,8 +143,7 @@ id JreExchangeVolatileStrongId(volatile_id *pVar, id newValue) {
   id oldValue = *(id *)pVar;
   *(id *)pVar = newValue;
   VOLATILE_UNLOCK(lock);
-  [oldValue autorelease];
-  return oldValue;
+  return AUTORELEASE(oldValue);
 }
 
 void JreReleaseVolatile(volatile_id *pVar) {
@@ -168,7 +174,7 @@ void JreCloneVolatileStrong(volatile_id *pVar, volatile_id *pOther) {
 id JreRetainedWithAssign(id parent, __strong id *pIvar, id value) {
   if (*pIvar) {
     JreRetainedWithHandlePreviousValue(parent, *pIvar);
-    [*pIvar autorelease];
+    AUTORELEASE(*pIvar);
   }
   // This retain makes sure that the child object has a retain count of at
   // least 2 which is required by JreRetainedWithInitialize.
@@ -189,7 +195,7 @@ id JreVolatileRetainedWithAssign(id parent, volatile_id *pIvar, id value) {
   VOLATILE_UNLOCK(lock);
   if (oldValue) {
     JreRetainedWithHandlePreviousValue(parent, oldValue);
-    [oldValue autorelease];
+    [oldValue release];
   }
   return value;
 }
@@ -412,4 +418,32 @@ FOUNDATION_EXPORT NSString *JreEnumConstantName(IOSClass *enumClass, jint ordina
   } else {
     return [NSString stringWithFormat:@"%@_%d", NSStringFromClass(enumClass.objcClass), ordinal];
   }
+}
+
+NSUInteger JreDefaultFastEnumeration(
+    __unsafe_unretained id<JavaLangIterable> obj, NSFastEnumerationState *state,
+    __unsafe_unretained id *stackbuf) {
+  SEL hasNextSel = sel_registerName("hasNext");
+  SEL nextSel = sel_registerName("next");
+  __unsafe_unretained id iter = (ARCBRIDGE id) (void *) state->extra[0];
+  if (!iter) {
+    static unsigned long no_mutation = 1;
+    state->mutationsPtr = &no_mutation;
+    // The for/in loop could break early so we have no guarantee of being able
+    // to release the iterator. As long as the current autorelease pool is not
+    // cleared within the loop, this should be fine.
+    iter = nil_chk([obj iterator]);
+    state->extra[0] = (unsigned long) iter;
+    state->extra[1] = (unsigned long) [iter methodForSelector:hasNextSel];
+    state->extra[2] = (unsigned long) [iter methodForSelector:nextSel];
+  }
+  jboolean (*hasNextImpl)(id, SEL) = (jboolean (*)(id, SEL)) state->extra[1];
+  id (*nextImpl)(id, SEL) = (id (*)(id, SEL)) state->extra[2];
+  NSUInteger objCount = 0;
+  state->itemsPtr = stackbuf;
+  if (hasNextImpl(iter, hasNextSel)) {
+    *stackbuf++ = nextImpl(iter, nextSel);
+    objCount++;
+  }
+  return objCount;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,11 +30,7 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.io.Serializable;
 
-// BEGIN android-note
-// removed link to collections framework docs
-// removed java 9 methods
-// END android-note
-
+// Android-changed: removed link to collections framework docs
 /**
  * An object that maps keys to values.  A map cannot contain duplicate keys;
  * each key can map to at most one value.
@@ -115,6 +111,35 @@ import java.io.Serializable;
  * Implementations may optionally handle the self-referential scenario, however
  * most current implementations do not do so.
  *
+ * <h2><a id="immutable">Immutable Map Static Factory Methods</a></h2>
+ * <p>The {@link Map#of() Map.of()} and
+ * {@link Map#ofEntries(Map.Entry...) Map.ofEntries()}
+ * static factory methods provide a convenient way to create immutable maps.
+ * The {@code Map}
+ * instances created by these methods have the following characteristics:
+ *
+ * <ul>
+ * <li>They are <em>structurally immutable</em>. Keys and values cannot be added,
+ * removed, or updated. Calling any mutator method will always cause
+ * {@code UnsupportedOperationException} to be thrown.
+ * However, if the contained keys or values are themselves mutable, this may cause the
+ * Map to behave inconsistently or its contents to appear to change.
+ * <li>They disallow {@code null} keys and values. Attempts to create them with
+ * {@code null} keys or values result in {@code NullPointerException}.
+ * <li>They are serializable if all keys and values are serializable.
+ * <li>They reject duplicate keys at creation time. Duplicate keys
+ * passed to a static factory method result in {@code IllegalArgumentException}.
+ * <li>The iteration order of mappings is unspecified and is subject to change.
+ * <li>They are <a href="../lang/doc-files/ValueBased.html">value-based</a>.
+ * Callers should make no assumptions about the identity of the returned instances.
+ * Factories are free to create new instances or reuse existing ones. Therefore,
+ * identity-sensitive operations on these instances (reference equality ({@code ==}),
+ * identity hash code, and synchronization) are unreliable and should be avoided.
+ * <li>They are serialized as specified on the
+ * <a href="{@docRoot}/serialized-form.html#java.util.CollSer">Serialized Form</a>
+ * page.
+ * </ul>
+ *
  * @param <K> the type of keys maintained by this map
  * @param <V> the type of mapped values
  *
@@ -127,6 +152,7 @@ import java.io.Serializable;
  * @see Set
  * @since 1.2
  */
+// Android-changed: fix doc links to Collection#optional-restrictions
 public interface Map<K, V> {
     // Query Operations
 
@@ -1246,4 +1272,5 @@ public interface Map<K, V> {
         }
         return newValue;
     }
+
 }
